@@ -1,5 +1,18 @@
 # 部署方案
 
+> 文档定位：说明各服务如何部署、注册、发现、扩缩容和恢复。服务职责见 `server-architecture.md`，运行时链路见 `runtime-flows.md`。
+
+## 快速摘要
+
+| 主题 | 策略 |
+| --- | --- |
+| 服务发现 | etcd 注册实例、lease 续租、ready/draining/offline 状态管理 |
+| 接入层 | `accsrv` 走 HTTP LB，`gatesrv` 承接 WebSocket 长连接 |
+| 请求保护 | `gamesrv` 使用本机请求队列做削峰、背压和超时 |
+| 事件总线 | Kafka 只做事件通知，不替代 MySQL 权威数据 |
+| 容灾 | readiness 摘流、Redis TTL、客户端重连、`recovery-controller` 增强治理 |
+| 扩缩容 | gate 按连接数扩缩，game 按 CPU/业务请求量扩缩 |
+
 ## 1. 部署目标
 
 部署方案需要保证 `accsrv`、`gatesrv`、`gamesrv` 可以独立扩缩容，并在单个实例故障时通过健康检查、服务发现、TTL 和客户端重连恢复服务。
@@ -10,16 +23,16 @@
 
 基础依赖：
 
-```text
-LB/入口层      : 承接客户端登录和 WebSocket 连接
-etcd           : 服务注册、服务发现、租约和实例健康状态
-Redis          : token、连接位置、路由、全局邮件缓存和版本
-MySQL          : 账号、邮件、玩家状态等权威数据
-Kafka          : 业务事件总线，承接全局邮件、活动、公告、配置变更等事件通知
-Outbox Relay   : 从 MySQL outbox 表投递业务事件到 Kafka
-recovery-controller : 自动化故障摘除、路由清理和告警联动
-日志/监控      : 采集服务日志、指标和告警
-```
+| 组件 | 职责 |
+| --- | --- |
+| LB/入口层 | 承接客户端登录和 WebSocket 连接 |
+| etcd | 服务注册、服务发现、租约和实例健康状态 |
+| Redis | token、连接位置、路由、全局邮件缓存和版本 |
+| MySQL | 账号、邮件、玩家状态等权威数据 |
+| Kafka | 业务事件总线，承接全局邮件、活动、公告、配置变更等事件通知 |
+| Outbox Relay | 从 MySQL outbox 表投递业务事件到 Kafka |
+| recovery-controller | 自动化故障摘除、路由清理和告警联动 |
+| 日志/监控 | 采集服务日志、指标和告警 |
 
 部署单元：
 
@@ -239,6 +252,8 @@ gatesrv -> GameCommandService.Dispatch -> CommandRequestQueue -> worker pool -> 
 - 队列满时返回 `CommandResponse(code=429)`，入口层或客户端需要按业务策略降频、提示繁忙或重试。
 - 业务 handler 必须使用请求 `context` 调用 MySQL、Redis 和下游 RPC，否则超时只能释放外层 worker，不能强制杀死底层 goroutine。
 - 这个队列不替代 Kafka；需要可靠异步投递、跨服务广播、失败重试的场景仍使用 Kafka + Outbox。
+
+详细队列模型、返回码、监控指标和演进方向见 `request-queue-design.md`。
 
 ## 8. 健康检查
 

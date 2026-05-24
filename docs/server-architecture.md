@@ -1,10 +1,23 @@
 # 服务器架构方案
 
+> 文档定位：说明服务为什么拆、怎么分层、各层之间如何协作。运行时细节见 `runtime-flows.md`，部署运维见 `deployment-plan.md`，请求队列细节见 `request-queue-design.md`。
+
+## 快速摘要
+
+| 主题 | 决策 |
+| --- | --- |
+| 服务拆分 | `accsrv`、`gatesrv`、`gamesrv`、`mgrsrv` 按压力模型和职责边界拆分 |
+| 协议 | 外部登录使用 HTTP 承载 protobuf message，服务内部使用 gRPC + protobuf |
+| 路由 | `gatesrv` 根据 UID 通过一致性哈希选择 `gamesrv` |
+| 存储 | MySQL 做权威存储，Redis 做共享缓存和运行态索引，本地缓存承接热点读 |
+| 事件 | MySQL Outbox + Kafka 负责跨实例业务事件通知 |
+| 请求保护 | `gamesrv` 通过有界请求队列、worker pool、超时和背压保护同步请求链路 |
+
 ## 1. 目标
 
 服务器架构按职责拆成登录鉴权、长连接接入、业务逻辑和管理入口四类服务，目标是让登录高峰、在线连接、业务请求和管理操作可以分别扩容、分别发布、分别容灾。
 
-本文只描述架构分层、拆分原因、服务职责和数据归属。具体流程见 `runtime-flows.md`，部署、服务发现和运维方案见 `deployment-plan.md`，全局邮件业务设计见 `requirements-design.md`。
+本文只描述架构分层、拆分原因、服务职责和数据归属。具体流程见 `runtime-flows.md`，部署、服务发现和运维方案见 `deployment-plan.md`，全局邮件业务设计见 `requirements-design.md`，请求队列细节见 `request-queue-design.md`。
 
 ## 2. 总体架构图
 
@@ -130,7 +143,7 @@ GameCommandService.Dispatch
     -> 业务 handler
 ```
 
-队列满时直接返回业务码 `429 command queue full`，让 `gatesrv` 或客户端可以快速失败、降频或重试，避免请求无限堆积。单请求还会受 `game.request_timeout` 约束，超时返回 `504 command request timeout`；业务 handler 必须沿用 `context` 调用 MySQL、Redis 和下游 RPC，避免底层操作在超时后继续长时间占用资源。
+队列满时直接返回业务码 `429 command queue full`，让 `gatesrv` 或客户端可以快速失败、降频或重试，避免请求无限堆积。单请求还会受 `game.request_timeout` 约束，超时返回 `504 command request timeout`。详细设计见 `request-queue-design.md`。
 
 ## 4. 为什么拆分服务
 
@@ -138,19 +151,12 @@ GameCommandService.Dispatch
 
 不同请求的压力模型不一样：
 
-```text
-登录请求:
-    短连接、高峰集中、依赖第三方鉴权和账号数据。
-
-长连接:
-    连接数大、持续时间长、网络 IO 和心跳压力明显。
-
-业务请求:
-    请求频率高、依赖玩家状态、需要按 UID 保持稳定路由。
-
-管理请求:
-    低频但权限敏感，需要和玩家入口隔离。
-```
+| 请求类型 | 压力特征 | 拆分目的 |
+| --- | --- | --- |
+| 登录请求 | 短连接、高峰集中、依赖第三方鉴权和账号数据 | 独立扩容登录入口，避免影响在线玩家 |
+| 长连接 | 连接数大、持续时间长、网络 IO 和心跳压力明显 | 独立承接连接和心跳压力 |
+| 业务请求 | 请求频率高、依赖玩家状态、需要按 UID 保持稳定路由 | 聚合玩家业务逻辑和状态访问 |
+| 管理请求 | 低频但权限敏感，需要和玩家入口隔离 | 降低权限风险和故障半径 |
 
 拆分后可以单独扩容。例如登录高峰只扩 `accsrv`，在线人数增长主要扩 `gatesrv`，业务 CPU 压力升高主要扩 `gamesrv`。
 

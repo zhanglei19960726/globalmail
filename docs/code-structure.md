@@ -1,5 +1,19 @@
 # 代码目录结构
 
+> 文档定位：说明当前代码目录如何映射到架构分层，以及新增模块应该放在哪一层。架构原则见 `server-architecture.md`，运行时链路见 `runtime-flows.md`。
+
+## 快速摘要
+
+| 目录 | 职责 |
+| --- | --- |
+| `cmd/` | 服务进程启动入口和依赖组装 |
+| `api/rpc/` | protobuf message、gRPC service、CommandID |
+| `app/` | 各服务应用层编排和协议适配 |
+| `domain/` | 领域模型、接口和核心业务规则 |
+| `data/` | MySQL、Redis、本地缓存等数据访问实现 |
+| `infra/` | Kafka、etcd、服务治理和运维基础设施 |
+| `config/` | YAML 配置结构、默认值和校验 |
+
 ## 1. 设计目标
 
 代码不再使用外层 `internal` 目录。整体按职责分成五类顶层目录：
@@ -20,10 +34,12 @@ infra/     Kafka、etcd、LB、metrics 等基础设施适配
 ```text
 globalmail/
 ├── docs/
+│   ├── README.md
 │   ├── server-architecture.md
 │   ├── runtime-flows.md
 │   ├── deployment-plan.md
 │   ├── requirements-design.md
+│   ├── request-queue-design.md
 │   └── code-structure.md
 │
 ├── api/

@@ -1,10 +1,22 @@
 # 运行时流程设计
 
+> 文档定位：用流程图和步骤说明请求在服务之间如何流转。架构边界见 `server-architecture.md`，部署和容灾见 `deployment-plan.md`。
+
+## 快速摘要
+
+| 流程 | 核心路径 |
+| --- | --- |
+| 登录 | Client HTTP `POST /login` -> `accsrv` -> gRPC `gamesrv.GameService.Login` -> Redis `DBLoginToken` |
+| 连接 | Client WebSocket -> `gatesrv` -> Redis 校验 token -> `ConnectionPool` 和 `DBGateConn` |
+| 心跳 | Client -> `GateService.Heartbeat` -> 刷新本机连接状态 -> 节流续期 Redis |
+| 命令 | Client command -> `gatesrv` 路由 -> `gamesrv` 请求队列 -> `CommandRegistry` |
+| 故障 | 失败清路由、客户端重连、Redis TTL 和 etcd lease 兜底 |
+
 ## 1. 目标
 
 本文描述服务器运行时的关键流程，包括登录连接、多 gate 连接管理、`gatesrv` 到 `gamesrv` 的路由，以及 gate/game 故障恢复。
 
-架构分层和拆分原因见 `server-architecture.md`，etcd 注册发现和部署运维见 `deployment-plan.md`。
+架构分层和拆分原因见 `server-architecture.md`，etcd 注册发现和部署运维见 `deployment-plan.md`，请求队列详细设计见 `request-queue-design.md`。
 
 ## 2. 登录和连接流程
 
@@ -315,6 +327,8 @@ game.request_queue_workers: 4
 game.request_queue_capacity: 1024
 game.request_timeout: 3s
 ```
+
+更完整的队列模型、背压语义、超时要求和监控指标见 `request-queue-design.md`。
 
 当前已注册命令：
 
