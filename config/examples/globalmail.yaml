@@ -38,3 +38,11 @@ etcd:
   lease_ttl: 10s
   keepalive_interval: 3s
   service_key_prefix: "/rh/services"
+
+gate:
+  route_ttl: 5m
+  virtual_nodes: 100
+
+acc:
+  login_token_ttl: 2m
+  game_service_addr: "127.0.0.1:9001"

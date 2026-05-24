@@ -26,6 +26,13 @@ globalmail/
 │   ├── requirements-design.md
 │   └── code-structure.md
 │
+├── api/
+│   └── rpc/
+│       ├── login.proto            # AccService/GameService 登录协议定义
+│       ├── mail.proto             # MailService 全局邮件读取协议定义
+│       ├── *.pb.go                # protoc-gen-go 生成的请求/回包结构
+│       └── *_grpc.pb.go           # protoc-gen-go-grpc 生成的 gRPC service
+│
 ├── domain/
 │   └── globalmail/                # 全局邮件领域层
 │       ├── types.go               # 领域模型和值对象
@@ -43,13 +50,15 @@ globalmail/
 │   │   └── repository.go          # Repository / OutboxRepository 实现
 │   ├── redis/                     # Redis 二级缓存实现
 │   │   ├── client.go              # Redis client 初始化
-│   │   └── repository.go          # CacheRepository 实现
+│   │   ├── repository.go          # CacheRepository 实现
+│   │   └── routing.go             # DBLoginToken、DBGateConn、DBSrvRouter 实现
 │   ├── localcache/                # gamesrv 本地缓存实现，后续下沉
 │   └── sqlschema/                 # 建表 SQL 常量
 │
 ├── infra/
 │   ├── kafka/                     # Kafka 事件总线适配
-│   │   └── producer.go            # EventPublisher 实现
+│   │   ├── producer.go            # EventPublisher 实现
+│   │   └── consumer.go            # GlobalMailChanged 消费者，已实现
 │   └── etcd/                      # etcd 服务注册和发现适配
 │       ├── client.go              # etcd client 初始化
 │       ├── registry.go            # 服务注册、状态更新和摘除
@@ -60,6 +69,9 @@ globalmail/
 │   └── config_test.go             # 配置加载测试
 │   └── examples/
 │       └── globalmail.yaml        # YAML 配置示例
+│
+├── app/
+│   └── bootstrap/                 # 配置路径和退出信号等服务启动公共工具，已实现
 │
 ├── go.mod
 └── README.md
@@ -114,6 +126,9 @@ globalmail/
 - `GlobalMailByServer:{serverID}`
 - `MailUserProfile:{RoleID}`
 - 缓存重建锁和 TTL 抖动
+- `DBLoginToken`
+- `DBGateConn`
+- `DBSrvRouter`
 
 ### 3.3 `infra/`
 
@@ -195,11 +210,11 @@ etcd:
 ```text
 cmd/
 ├── accsrv/
-│   └── main.go                    # 登录鉴权服务启动入口
+│   └── main.go                    # 登录鉴权服务启动入口，已实现 token 骨架
 ├── gatesrv/
-│   └── main.go                    # 长连接网关服务启动入口
+│   └── main.go                    # 长连接网关服务启动入口，已实现路由骨架
 ├── gamesrv/
-│   └── main.go                    # 玩家业务服务启动入口
+│   └── main.go                    # 玩家业务服务启动入口，已实现事件消费骨架
 ├── mgrsrv/
 │   └── main.go                    # GM/管理后台服务启动入口，已实现骨架
 ├── outboxrelay/
@@ -208,22 +223,29 @@ cmd/
     └── main.go                    # 自动化容灾控制器
 
 app/
+├── bootstrap/
+│   └── config.go                  # YAML 配置路径和退出信号公共工具，已实现
+│
 ├── accsrv/
-│   ├── server.go                  # HTTP/RPC 服务组装
+│   ├── server.go                  # gRPC AccService 组装，已实现 Login
 │   ├── handler.go                 # 登录接口处理
-│   └── service.go                 # 登录业务编排
+│   └── service.go                 # 登录业务编排，转发 gamesrv 后写 DBLoginToken
 │
 ├── gatesrv/
-│   ├── server.go                  # WebSocket 服务组装
-│   ├── session.go                 # SessPool 和连接管理
+│   ├── server.go                  # HTTP/WebSocket 服务组装，已实现路由查询骨架
+│   ├── session.go                 # SessPool 路由缓存，已实现
 │   ├── router.go                  # UID 到 gamesrv 的一致性哈希路由，已实现
+│   ├── route_service.go           # session route、Redis route、etcd list 串联，已实现
+│   ├── etcd_provider.go           # etcd ready gamesrv 转路由节点，已实现
 │   └── handler.go                 # 客户端协议处理
 │
 ├── gamesrv/
 │   ├── server.go                  # 游戏业务 RPC 服务组装
+│   ├── account_service.go         # GameService.Login，负责用户获取或创建
 │   ├── mail_handler.go            # 邮件相关协议处理
-│   ├── mail_service.go            # 全局邮件读取/领取编排
-│   └── event_consumer.go          # Kafka 事件消费并刷新本地缓存
+│   ├── mail_service.go            # 全局邮件读取、状态合并编排，已实现
+│   ├── mail_rpc.go                # MailService gRPC 适配层，已实现
+│   └── event_consumer.go          # Kafka 事件消费并刷新本地缓存，已实现
 │
 ├── mgrsrv/
 │   ├── server.go                  # 管理后台服务组装

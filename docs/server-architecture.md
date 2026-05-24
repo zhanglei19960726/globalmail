@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart TD
-    client[客户端] -->|"登录请求"| lb[LB入口层]
+    client[客户端] -->|"gRPC登录请求"| lb[LB入口层]
     client -->|"WebSocket长连接"| lb
 
     subgraph accessLayer [接入层]
@@ -47,6 +47,7 @@ flowchart TD
     mgr --> gate
     mgr --> game
 
+    acc -->|"gRPC Login转发"| game
     acc -->|"写入DBLoginToken"| redis
     gate -->|"校验token_绑定DBGateConn"| redis
     gate -->|"读写DBSrvRouter"| redis
@@ -56,7 +57,6 @@ flowchart TD
     gate -->|"转发玩家业务包"| game
     game --> gameMem
 
-    acc --> mysql
     game --> mysql
     mgr --> mysql
     mgr -->|"写业务数据和Outbox"| mysql
@@ -71,7 +71,7 @@ flowchart TD
 
 这张图表达四个核心关系：
 
-- 登录链路：客户端经 LB 到 `accsrv`，登录成功后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
+- 登录链路：客户端经 LB 通过 gRPC 调用 `accsrv`，`accsrv` 转发到 `gamesrv` 处理用户注册/用户资料，随后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
 - 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做一致性哈希 `RouteNode`。
 - 存储链路：运行态热点数据放本地内存和 Redis，账号、玩家、邮件、领取状态等权威数据落 MySQL。
 - 服务发现链路：各服务启动后注册到 etcd，`gatesrv` 通过 etcd watch 得到健康 `gamesrv` 列表。
@@ -103,10 +103,12 @@ flowchart TD
 
 拆分后每层只处理自己的问题：
 
-- `accsrv` 只负责确认“这个玩家是谁”。
+- `accsrv` 只负责确认“这个玩家是谁”、转发登录请求和生成短期登录 token。
 - `gatesrv` 只负责维护“这个玩家当前连在哪”。
 - `gamesrv` 只负责处理“这个玩家的业务怎么执行”。
 - `mgrsrv` 只负责内部管理操作，不混入玩家连接入口。
+
+服务间和客户端交互协议统一使用 gRPC，service、请求和回包结构通过 protobuf 定义并生成 Go 代码；当前登录链路定义在 `api/rpc/login.proto`，全局邮件读取定义在 `api/rpc/mail.proto`。
 
 这样可以避免一个服务同时承担鉴权、连接、业务和管理逻辑，降低发布和排障复杂度。
 

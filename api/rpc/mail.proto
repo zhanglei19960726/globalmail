@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package globalmail.rpc;
+
+option go_package = "globalmail/api/rpc;rpc";
+
+service MailService {
+  rpc ListGlobalMails(ListGlobalMailsRequest) returns (ListGlobalMailsResponse);
+}
+
+message UserProfile {
+  int64 uid = 1;
+  int64 role_id = 2;
+  int32 server_id = 3;
+  int32 vip_level = 4;
+  int64 total_recharge = 5;
+  int32 corps_level = 6;
+  int32 open_days = 7;
+  string package_type = 8;
+  string country = 9;
+}
+
+message ListGlobalMailsRequest {
+  UserProfile profile = 1;
+}
+
+message ListGlobalMailsResponse {
+  repeated GlobalMailItem mails = 1;
+}
+
+message GlobalMailItem {
+  int64 global_mail_id = 1;
+  string title = 2;
+  string content = 3;
+  bytes message_map = 4;
+  bytes loots = 5;
+  string sender = 6;
+  string category = 7;
+  int64 template_id = 8;
+  bytes params = 9;
+  string external_url = 10;
+  string start_time = 11;
+  string expire_time = 12;
+  string status = 13;
+  int64 version = 14;
+  string user_status = 15;
+  repeated int32 claimed_loot_indexes = 16;
+}

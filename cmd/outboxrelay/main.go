@@ -4,25 +4,22 @@ import (
 	"context"
 	"flag"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
+	"globalmail/app/bootstrap"
 	"globalmail/app/outboxrelay"
-	"globalmail/config"
 	"globalmail/data/mysql"
 	"globalmail/domain/globalmail"
 	"globalmail/infra/kafka"
 )
 
 func main() {
-	configPath := flag.String("config", "config/examples/globalmail.yaml", "path to YAML config file")
+	configPath := bootstrap.ConfigPathFlag("")
 	interval := flag.Duration("interval", time.Second, "outbox flush interval")
 	limit := flag.Int("limit", 100, "max events per flush")
 	flag.Parse()
 
-	cfg, err := config.LoadFile(*configPath)
+	cfg, err := bootstrap.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
@@ -44,7 +41,7 @@ func main() {
 	relay := globalmail.NewOutboxRelay(repo, publisher)
 	worker := outboxrelay.NewWorker(relay, *limit, *interval, log.Default())
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := bootstrap.SignalContext(context.Background())
 	defer stop()
 
 	if err := worker.Run(ctx); err != nil && err != context.Canceled {

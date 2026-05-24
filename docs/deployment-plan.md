@@ -150,9 +150,9 @@ ListReady(serviceName)
 
 `accsrv`：
 
-- 走普通 HTTP/RPC 负载均衡。
+- 走 gRPC 负载均衡，客户端通过 `AccService.Login` 登录。
 - 实例无状态，任意健康实例都可以处理登录。
-- 登录成功后写 `DBLoginToken`，返回 `SessionKey`。
+- 登录时转发 `gamesrv.GameService.Login` 完成用户注册/资料初始化，成功后写 `DBLoginToken`，返回 `SessionKey`。
 
 `gatesrv`：
 

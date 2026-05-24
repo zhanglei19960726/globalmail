@@ -34,6 +34,8 @@ type Config struct {
 	Redis   RedisConfig   `yaml:"redis"`
 	Kafka   KafkaConfig   `yaml:"kafka"`
 	Etcd    EtcdConfig    `yaml:"etcd"`
+	Gate    GateConfig    `yaml:"gate"`
+	Acc     AccConfig     `yaml:"acc"`
 }
 
 type ServiceConfig struct {
@@ -79,6 +81,16 @@ type EtcdConfig struct {
 	ServiceKeyPrefix  string   `yaml:"service_key_prefix"`
 }
 
+type GateConfig struct {
+	RouteTTL     Duration `yaml:"route_ttl"`
+	VirtualNodes int      `yaml:"virtual_nodes"`
+}
+
+type AccConfig struct {
+	LoginTokenTTL   Duration `yaml:"login_token_ttl"`
+	GameServiceAddr string   `yaml:"game_service_addr"`
+}
+
 func Default() Config {
 	return Config{
 		Service: ServiceConfig{
@@ -110,6 +122,14 @@ func Default() Config {
 			LeaseTTL:          Duration{Duration: 10 * time.Second},
 			KeepAliveInterval: Duration{Duration: 3 * time.Second},
 			ServiceKeyPrefix:  "/rh/services",
+		},
+		Gate: GateConfig{
+			RouteTTL:     Duration{Duration: 5 * time.Minute},
+			VirtualNodes: 100,
+		},
+		Acc: AccConfig{
+			LoginTokenTTL:   Duration{Duration: 2 * time.Minute},
+			GameServiceAddr: "127.0.0.1:9001",
 		},
 	}
 }
@@ -154,6 +174,18 @@ func (c Config) Validate() error {
 	}
 	if c.Etcd.KeepAliveInterval.Duration <= 0 {
 		return errors.New("etcd keepalive interval must be positive")
+	}
+	if c.Gate.RouteTTL.Duration <= 0 {
+		return errors.New("gate route ttl must be positive")
+	}
+	if c.Gate.VirtualNodes <= 0 {
+		return errors.New("gate virtual nodes must be positive")
+	}
+	if c.Acc.LoginTokenTTL.Duration <= 0 {
+		return errors.New("acc login token ttl must be positive")
+	}
+	if c.Acc.GameServiceAddr == "" {
+		return errors.New("acc game service addr is required")
 	}
 	return nil
 }

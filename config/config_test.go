@@ -18,6 +18,15 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Etcd.LeaseTTL.Duration != 10*time.Second {
 		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL.Duration)
 	}
+	if cfg.Gate.RouteTTL.Duration != 5*time.Minute {
+		t.Fatalf("unexpected gate route ttl: %s", cfg.Gate.RouteTTL.Duration)
+	}
+	if cfg.Acc.LoginTokenTTL.Duration != 2*time.Minute {
+		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)
+	}
+	if cfg.Acc.GameServiceAddr == "" {
+		t.Fatal("expected default game service addr")
+	}
 }
 
 func TestLoadBytesOverridesDefaults(t *testing.T) {
@@ -42,6 +51,12 @@ etcd:
     - etcd-1:2379
     - etcd-2:2379
   lease_ttl: 15s
+gate:
+  route_ttl: 10m
+  virtual_nodes: 200
+acc:
+  login_token_ttl: 3m
+  game_service_addr: "gamesrv:9001"
 `))
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
@@ -69,6 +84,18 @@ etcd:
 	}
 	if cfg.Redis.KeyPrefix != "rh:" {
 		t.Fatalf("expected default redis key prefix, got %s", cfg.Redis.KeyPrefix)
+	}
+	if cfg.Gate.RouteTTL.Duration != 10*time.Minute {
+		t.Fatalf("unexpected gate route ttl: %s", cfg.Gate.RouteTTL.Duration)
+	}
+	if cfg.Gate.VirtualNodes != 200 {
+		t.Fatalf("unexpected gate virtual nodes: %d", cfg.Gate.VirtualNodes)
+	}
+	if cfg.Acc.LoginTokenTTL.Duration != 3*time.Minute {
+		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)
+	}
+	if cfg.Acc.GameServiceAddr != "gamesrv:9001" {
+		t.Fatalf("unexpected game service addr: %s", cfg.Acc.GameServiceAddr)
 	}
 }
 

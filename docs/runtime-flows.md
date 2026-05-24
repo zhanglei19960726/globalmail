@@ -10,9 +10,11 @@
 
 ```mermaid
 flowchart TD
-    clientLogin[客户端请求accsrv登录] --> auth[第三方登录校验]
-    auth --> account[获取或创建账号DBAccountInfo]
-    account --> token[CreateLoginToken]
+    clientLogin[客户端gRPC请求accsrv.AccService/Login] --> auth[第三方登录校验]
+    auth --> forward[accsrv gRPC调用gamesrv.GameService/Login]
+    forward --> account[gamesrv获取或创建账号和玩家]
+    account --> identity[返回UID_RoleID_ServerID]
+    identity --> token[accsrv创建LoginToken]
     token --> loginToken[写DBLoginToken到Redis]
     loginToken --> sessionKey[返回SessionKey给客户端]
 
@@ -29,6 +31,8 @@ flowchart TD
 关键点：
 
 - `accsrv` 登录成功后创建 `DBLoginToken`，客户端拿到的是 `SessionKey`。
+- 用户注册、玩家初始化和用户资料归属 `gamesrv`；`accsrv` 通过 gRPC 转发登录请求到 `gamesrv`。
+- 登录协议由 `api/rpc/login.proto` 定义，并生成 `login.pb.go`、`login_grpc.pb.go`。
 - 客户端连接 `/gate/ws?token=xxx`。
 - `gatesrv` 用 token 查 Redis 中的 `DBLoginToken`，拿到 `UID`、`RoleID`、`ServerID`。
 - 后续客户端业务包中的 UID 不可信，gate 会用 session 中的 UID 覆盖包头。
@@ -97,6 +101,72 @@ session route
     -> Redis DBSrvRouter:{UID}
     -> ConsistentHash(UID, healthyGamesrvList)
 ```
+
+当前代码实现：
+
+```text
+cmd/gatesrv/main.go:
+    组装 Redis route store、etcd gamesrv provider、RouteService，并注册 gatesrv 实例。
+
+app/gatesrv/server.go:
+    暴露 /healthz 和 /route?uid= 路由查询骨架，后续 WebSocket 协议层复用 RouteService。
+
+app/gatesrv/session.go:
+    维护 UID -> gamesrv 的本机 session route cache。
+
+app/gatesrv/router.go:
+    使用一致性哈希按 UID 选择 gamesrv。
+
+app/gatesrv/route_service.go:
+    串联 session route、Redis DBSrvRouter、etcd ready gamesrv 列表和一致性哈希。
+
+data/redis/routing.go:
+    实现 DBLoginToken、DBGateConn、DBSrvRouter 的 Redis 读写、TTL 和删除。
+```
+
+## 5. gamesrv 全局邮件刷新流程
+
+Kafka 消费链路：
+
+```text
+Kafka rh.global-mail-events
+    -> infra/kafka.GlobalMailConsumer
+    -> cmd/gamesrv/main.go 组装消费者和 MailService
+    -> app/gamesrv.EventConsumer
+    -> MailService.ForceRefreshCache
+    -> domain/globalmail.LocalCache
+```
+
+邮件读取链路：
+
+```text
+客户端或 gatesrv gRPC MailService.ListGlobalMails
+    -> api/rpc/mail.proto
+    -> app/gamesrv.MailRPCServer
+    -> MailService.ListGlobalMails
+    -> LocalCache.VisibleMails
+    -> MailRepository.GetUserStates
+    -> 合并 unread/read/claimed/deleted 状态
+    -> 返回 protobuf GlobalMailItem 列表
+```
+
+## 6. accsrv 登录 Token 流程
+
+当前代码骨架：
+
+```text
+客户端 gRPC AccService.Login
+    -> api/rpc/login.proto
+    -> app/accsrv.Server
+    -> app/accsrv.Service.Login
+    -> gRPC GameService.Login
+    -> app/gamesrv.AccountService.GetOrCreateUser
+    -> accsrv 创建 LoginToken
+    -> data/redis.SetLoginToken
+    -> Redis DBLoginToken:{token}
+```
+
+`DBLoginToken` 保存 `uid`、`role_id`、`server_id` 和过期时间，后续 `gatesrv` 建立长连接时用于校验和绑定连接。`accsrv` 不直接创建用户，只负责鉴权入口、转发 `gamesrv`、生成短期登录 token。
 
 `DBSrvRouter` 用于跨进程共享玩家后端路由：
 

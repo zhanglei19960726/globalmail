@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"globalmail/app/bootstrap"
 	"globalmail/app/mgrsrv"
-	"globalmail/config"
 	"globalmail/data/mysql"
 	redisdata "globalmail/data/redis"
 	"globalmail/domain/globalmail"
@@ -20,10 +20,10 @@ func (timeIDGenerator) NextID() int64 {
 }
 
 func main() {
-	configPath := flag.String("config", "config/examples/globalmail.yaml", "path to YAML config file")
+	configPath := bootstrap.ConfigPathFlag("")
 	flag.Parse()
 
-	cfg, err := config.LoadFile(*configPath)
+	cfg, err := bootstrap.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
