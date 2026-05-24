@@ -11,7 +11,7 @@
 | 路由 | `gatesrv` 根据 UID 通过一致性哈希选择 `gamesrv` |
 | 存储 | MySQL 做权威存储，Redis 做共享缓存和运行态索引，本地缓存承接热点读 |
 | 事件 | MySQL Outbox + Kafka 负责跨实例业务事件通知 |
-| 请求保护 | `gamesrv` 通过有界请求队列、worker pool、超时和背压保护同步请求链路 |
+| 请求保护 | `gamesrv` 按 `RoleID` 建独立请求 lane，同玩家串行、不同玩家并行，并通过超时和背压保护同步请求链路 |
 
 ## 1. 目标
 
@@ -88,7 +88,7 @@ flowchart TD
 
 - 登录链路：客户端经 LB 通过 HTTP 调用 `accsrv` 登录接口，请求和回包使用 `login.proto` 中的 protobuf message；`accsrv` 再通过 gRPC 转发到 `gamesrv` 处理用户注册/用户资料，随后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
 - 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做一致性哈希 `RouteNode`。
-- 命令分发链路：`gatesrv` 从客户端业务包解析出 protobuf `CommandID`，按 UID 选择目标 `gamesrv`，再调用目标 `gamesrv` 的 `GameCommandService.Dispatch`；`gamesrv` 先把请求放入本机有界请求队列，再由 worker 调用命令注册表找到真正的业务 handler。
+- 命令分发链路：`gatesrv` 从客户端业务包解析出 protobuf `CommandID`，按 UID 选择目标 `gamesrv`，再调用目标 `gamesrv` 的 `GameCommandService.Dispatch`；`gamesrv` 先按 `RoleID` 放入对应玩家 lane，再由 worker 调用命令注册表找到真正的业务 handler。
 - 存储链路：运行态热点数据放本地内存和 Redis，账号、玩家、邮件、领取状态等权威数据落 MySQL。
 - 服务发现链路：各服务启动后注册到 etcd，`gatesrv` 通过 etcd watch 得到健康 `gamesrv` 列表。
 - 事件通知链路：管理入口写业务数据和 outbox，`Outbox Relay` 投递 Kafka，`gamesrv` 消费事件刷新本地缓存。
@@ -137,7 +137,8 @@ COMMAND_ID_MAIL_DELETE      -> MailRPCServer.DeleteGlobalMail
 
 ```text
 GameCommandService.Dispatch
-    -> CommandRequestQueue 有界队列
+    -> CommandRequestQueue 全局容量控制
+    -> RoleID lane
     -> worker pool
     -> CommandRegistry.Dispatch
     -> 业务 handler

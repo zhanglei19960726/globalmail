@@ -95,9 +95,10 @@ type AccConfig struct {
 }
 
 type GameConfig struct {
-	RequestQueueWorkers  int      `yaml:"request_queue_workers"`
-	RequestQueueCapacity int      `yaml:"request_queue_capacity"`
-	RequestTimeout       Duration `yaml:"request_timeout"`
+	RequestQueueWorkers      int      `yaml:"request_queue_workers"`
+	RequestQueueCapacity     int      `yaml:"request_queue_capacity"`
+	RequestRoleQueueCapacity int      `yaml:"request_role_queue_capacity"`
+	RequestTimeout           Duration `yaml:"request_timeout"`
 }
 
 func Default() Config {
@@ -143,9 +144,10 @@ func Default() Config {
 			GameServiceAddr: "127.0.0.1:9001",
 		},
 		Game: GameConfig{
-			RequestQueueWorkers:  4,
-			RequestQueueCapacity: 1024,
-			RequestTimeout:       Duration{Duration: 3 * time.Second},
+			RequestQueueWorkers:      4,
+			RequestQueueCapacity:     1024,
+			RequestRoleQueueCapacity: 32,
+			RequestTimeout:           Duration{Duration: 3 * time.Second},
 		},
 	}
 }
@@ -214,6 +216,9 @@ func (c Config) Validate() error {
 	}
 	if c.Game.RequestQueueCapacity <= 0 {
 		return errors.New("game request queue capacity must be positive")
+	}
+	if c.Game.RequestRoleQueueCapacity <= 0 {
+		return errors.New("game request role queue capacity must be positive")
 	}
 	if c.Game.RequestTimeout.Duration <= 0 {
 		return errors.New("game request timeout must be positive")

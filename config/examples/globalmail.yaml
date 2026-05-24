@@ -52,4 +52,5 @@ acc:
 game:
   request_queue_workers: 4
   request_queue_capacity: 1024
+  request_role_queue_capacity: 32
   request_timeout: 3s

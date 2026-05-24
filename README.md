@@ -21,7 +21,19 @@ GlobalMail 是一个 Go 微服务项目，用于沉淀游戏服务器的登录�
 | 存储 | MySQL 作为权威存储，Redis 作为共享缓存和运行态索引，本地缓存承接热点读 |
 | 服务发现 | etcd 负责实例注册、lease 续租、ready/draining/offline 状态和发现 |
 | 事件通知 | MySQL Outbox + Kafka 广播全局邮件等业务事件 |
-| 请求保护 | `gamesrv` 使用有界请求队列、worker pool、`429` 背压和 `504` 超时 |
+| 请求保护 | `gamesrv` 按 `RoleID` 建立独立请求 lane，同玩家串行、不同玩家并行，并提供 `429` 背压和 `504` 超时 |
+
+请求队列的核心行为：
+
+```text
+GameCommandService.Dispatch
+  -> 全局容量检查
+  -> 按 RoleID 进入玩家独立 lane
+  -> worker pool 消费
+  -> CommandRegistry.Dispatch
+```
+
+同一 `RoleID` 的请求按 FIFO 串行处理，不同 `RoleID` 的请求可并行处理。这样可以避免单个玩家的慢请求或重试风暴影响其它玩家。
 
 ## 目录结构
 
@@ -82,6 +94,7 @@ etcd:
 game:
   request_queue_workers: 4
   request_queue_capacity: 1024
+  request_role_queue_capacity: 32
   request_timeout: 3s
 ```
 

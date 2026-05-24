@@ -8,7 +8,7 @@
 | --- | --- |
 | 服务发现 | etcd 注册实例、lease 续租、ready/draining/offline 状态管理 |
 | 接入层 | `accsrv` 走 HTTP LB，`gatesrv` 承接 WebSocket 长连接 |
-| 请求保护 | `gamesrv` 使用本机请求队列做削峰、背压和超时 |
+| 请求保护 | `gamesrv` 使用按 `RoleID` 分组的本机请求队列做削峰、隔离、背压和超时 |
 | 事件总线 | Kafka 只做事件通知，不替代 MySQL 权威数据 |
 | 容灾 | readiness 摘流、Redis TTL、客户端重连、`recovery-controller` 增强治理 |
 | 扩缩容 | gate 按连接数扩缩，game 按 CPU/业务请求量扩缩 |
@@ -241,17 +241,27 @@ gamesrv:
 `gamesrv` 的请求队列用于同步玩家请求的本机削峰和背压，不承担跨进程可靠投递：
 
 ```text
-gatesrv -> GameCommandService.Dispatch -> CommandRequestQueue -> worker pool -> CommandRegistry
+gatesrv -> GameCommandService.Dispatch -> CommandRequestQueue -> RoleID lane -> worker pool -> CommandRegistry
 ```
 
 部署建议：
 
 - `game.request_queue_workers` 控制并发处理请求的 worker 数，建议接近实例可用 CPU 核心数或按业务耗时压测后调整。
-- `game.request_queue_capacity` 控制单实例最大排队请求数，必须设置上限，避免内存被请求堆积打满。
+- `game.request_queue_capacity` 控制单实例所有 `RoleID` 的全局请求容量，必须设置上限，避免内存被请求堆积打满。
+- `game.request_role_queue_capacity` 控制单个 `RoleID` 最多排队请求数，避免单个玩家挤占全局队列；建议明显小于全局容量。
 - `game.request_timeout` 控制单请求从进入队列到处理完成的总耗时，超时返回 `CommandResponse(code=504)`。
 - 队列满时返回 `CommandResponse(code=429)`，入口层或客户端需要按业务策略降频、提示繁忙或重试。
 - 业务 handler 必须使用请求 `context` 调用 MySQL、Redis 和下游 RPC，否则超时只能释放外层 worker，不能强制杀死底层 goroutine。
 - 这个队列不替代 Kafka；需要可靠异步投递、跨服务广播、失败重试的场景仍使用 Kafka + Outbox。
+
+推荐初始值：
+
+```text
+game.request_queue_workers: 4
+game.request_queue_capacity: 1024
+game.request_role_queue_capacity: 32
+game.request_timeout: 3s
+```
 
 详细队列模型、返回码、监控指标和演进方向见 `request-queue-design.md`。
 
@@ -471,6 +481,7 @@ MaxConn
 DrainTimeout
 GameRequestQueueWorkers
 GameRequestQueueCapacity
+GameRequestRoleQueueCapacity
 GameRequestTimeout
 RecoveryControllerEnabled
 RouteFailureThreshold

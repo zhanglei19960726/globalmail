@@ -19,11 +19,12 @@ func (f commandDispatcherFunc) Dispatch(ctx context.Context, req *rpc.CommandReq
 func TestCommandRequestQueueDispatchesWithWorker(t *testing.T) {
 	queue := NewCommandRequestQueue(commandDispatcherFunc(func(_ context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
 		return &rpc.CommandResponse{CommandId: req.GetCommandId(), Seq: req.GetSeq(), Code: 0}, nil
-	}), CommandQueueOptions{Workers: 1, Capacity: 1})
+	}), CommandQueueOptions{Workers: 1, Capacity: 1, RoleQueueCapacity: 1})
 	defer queue.Close()
 
 	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{
 		CommandId: rpc.CommandID_COMMAND_ID_MAIL_LIST_GLOBAL,
+		RoleId:    20001,
 		Seq:       100,
 	})
 	if err != nil {
@@ -46,12 +47,12 @@ func TestCommandRequestQueueReturnsFullResponse(t *testing.T) {
 		case <-release:
 			return &rpc.CommandResponse{CommandId: req.GetCommandId(), Seq: req.GetSeq()}, nil
 		}
-	}), CommandQueueOptions{Workers: 1, Capacity: 1})
+	}), CommandQueueOptions{Workers: 1, Capacity: 2, RoleQueueCapacity: 1})
 	defer queue.Close()
 
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{Seq: 1})
+		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 1})
 		firstDone <- err
 	}()
 	select {
@@ -62,13 +63,14 @@ func TestCommandRequestQueueReturnsFullResponse(t *testing.T) {
 
 	secondDone := make(chan error, 1)
 	go func() {
-		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{Seq: 2})
+		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 2})
 		secondDone <- err
 	}()
-	waitForQueueDepth(t, queue, 1)
+	waitForRoleQueueDepth(t, queue, 20001, 1)
 
 	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{
 		CommandId: rpc.CommandID_COMMAND_ID_MAIL_DELETE,
+		RoleId:    20001,
 		Seq:       3,
 	})
 	if err != nil {
@@ -101,7 +103,7 @@ func TestCommandRequestQueueReturnsFullResponse(t *testing.T) {
 func TestCommandRequestQueueRejectsAfterClose(t *testing.T) {
 	queue := NewCommandRequestQueue(commandDispatcherFunc(func(context.Context, *rpc.CommandRequest) (*rpc.CommandResponse, error) {
 		return nil, nil
-	}), CommandQueueOptions{Workers: 1, Capacity: 1})
+	}), CommandQueueOptions{Workers: 1, Capacity: 1, RoleQueueCapacity: 1})
 	queue.Close()
 
 	_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{})
@@ -114,11 +116,12 @@ func TestCommandRequestQueueReturnsTimeoutResponse(t *testing.T) {
 	queue := NewCommandRequestQueue(commandDispatcherFunc(func(ctx context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}), CommandQueueOptions{Workers: 1, Capacity: 1, RequestTimeout: 10 * time.Millisecond})
+	}), CommandQueueOptions{Workers: 1, Capacity: 1, RoleQueueCapacity: 1, RequestTimeout: 10 * time.Millisecond})
 	defer queue.Close()
 
 	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{
 		CommandId: rpc.CommandID_COMMAND_ID_MAIL_CLAIM,
+		RoleId:    20001,
 		Seq:       9,
 	})
 	if err != nil {
@@ -134,11 +137,11 @@ func TestCommandRequestQueueReleasesWorkerAfterTimeout(t *testing.T) {
 	queue := NewCommandRequestQueue(commandDispatcherFunc(func(context.Context, *rpc.CommandRequest) (*rpc.CommandResponse, error) {
 		<-block
 		return &rpc.CommandResponse{Code: 0}, nil
-	}), CommandQueueOptions{Workers: 1, Capacity: 1, RequestTimeout: 10 * time.Millisecond})
+	}), CommandQueueOptions{Workers: 1, Capacity: 1, RoleQueueCapacity: 1, RequestTimeout: 10 * time.Millisecond})
 	defer queue.Close()
 	defer close(block)
 
-	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{Seq: 1})
+	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 1})
 	if err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
@@ -146,7 +149,7 @@ func TestCommandRequestQueueReleasesWorkerAfterTimeout(t *testing.T) {
 		t.Fatalf("expected first dispatch timeout, got %+v", resp)
 	}
 
-	resp, err = queue.Dispatch(context.Background(), &rpc.CommandRequest{Seq: 2})
+	resp, err = queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20002, Seq: 2})
 	if err != nil {
 		t.Fatalf("second dispatch failed: %v", err)
 	}
@@ -155,7 +158,96 @@ func TestCommandRequestQueueReleasesWorkerAfterTimeout(t *testing.T) {
 	}
 }
 
-func waitForQueueDepth(t *testing.T, queue *CommandRequestQueue, depth int) {
+func TestCommandRequestQueueSerializesSameRole(t *testing.T) {
+	started := make(chan int64, 2)
+	releaseFirst := make(chan struct{})
+	queue := NewCommandRequestQueue(commandDispatcherFunc(func(ctx context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
+		started <- req.GetSeq()
+		if req.GetSeq() == 1 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseFirst:
+			}
+		}
+		return &rpc.CommandResponse{Seq: req.GetSeq()}, nil
+	}), CommandQueueOptions{Workers: 2, Capacity: 4, RoleQueueCapacity: 4})
+	defer queue.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 1})
+		firstDone <- err
+	}()
+	if got := <-started; got != 1 {
+		t.Fatalf("expected first request to start, got seq %d", got)
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 2})
+		secondDone <- err
+	}()
+	select {
+	case got := <-started:
+		t.Fatalf("same role request should wait, got seq %d", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	if got := <-started; got != 2 {
+		t.Fatalf("expected second request after first finished, got seq %d", got)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+}
+
+func TestCommandRequestQueueRunsDifferentRolesIndependently(t *testing.T) {
+	roleOneStarted := make(chan struct{})
+	releaseRoleOne := make(chan struct{})
+	queue := NewCommandRequestQueue(commandDispatcherFunc(func(ctx context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
+		if req.GetRoleId() == 20001 {
+			close(roleOneStarted)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseRoleOne:
+			}
+		}
+		return &rpc.CommandResponse{Seq: req.GetSeq()}, nil
+	}), CommandQueueOptions{Workers: 2, Capacity: 4, RoleQueueCapacity: 2})
+	defer queue.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20001, Seq: 1})
+		firstDone <- err
+	}()
+	select {
+	case <-roleOneStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected role one request to start")
+	}
+
+	resp, err := queue.Dispatch(context.Background(), &rpc.CommandRequest{RoleId: 20002, Seq: 2})
+	if err != nil {
+		t.Fatalf("different role dispatch failed: %v", err)
+	}
+	if resp.GetSeq() != 2 {
+		t.Fatalf("unexpected different role response: %+v", resp)
+	}
+
+	close(releaseRoleOne)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("role one request failed: %v", err)
+	}
+}
+
+func waitForRoleQueueDepth(t *testing.T, queue *CommandRequestQueue, roleID int64, depth int) {
 	t.Helper()
 	deadline := time.After(time.Second)
 	ticker := time.NewTicker(time.Millisecond)
@@ -163,9 +255,16 @@ func waitForQueueDepth(t *testing.T, queue *CommandRequestQueue, depth int) {
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("expected queue depth %d, got %d", depth, len(queue.jobs))
+			t.Fatalf("expected role queue depth %d", depth)
 		case <-ticker.C:
-			if len(queue.jobs) == depth {
+			queue.mu.Lock()
+			lane := queue.lanes[roleID]
+			got := 0
+			if lane != nil {
+				got = len(lane.jobs)
+			}
+			queue.mu.Unlock()
+			if got == depth {
 				return
 			}
 		}

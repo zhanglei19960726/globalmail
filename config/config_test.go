@@ -33,6 +33,9 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Game.RequestQueueWorkers != 4 || cfg.Game.RequestQueueCapacity != 1024 {
 		t.Fatalf("unexpected game request queue config: %+v", cfg.Game)
 	}
+	if cfg.Game.RequestRoleQueueCapacity != 32 {
+		t.Fatalf("unexpected role queue capacity: %d", cfg.Game.RequestRoleQueueCapacity)
+	}
 	if cfg.Game.RequestTimeout.Duration != 3*time.Second {
 		t.Fatalf("unexpected game request timeout: %s", cfg.Game.RequestTimeout.Duration)
 	}
@@ -71,6 +74,7 @@ acc:
 game:
   request_queue_workers: 8
   request_queue_capacity: 2048
+  request_role_queue_capacity: 64
   request_timeout: 5s
 `))
 	if err != nil {
@@ -123,6 +127,9 @@ game:
 	}
 	if cfg.Game.RequestQueueCapacity != 2048 {
 		t.Fatalf("unexpected request queue capacity: %d", cfg.Game.RequestQueueCapacity)
+	}
+	if cfg.Game.RequestRoleQueueCapacity != 64 {
+		t.Fatalf("unexpected role queue capacity: %d", cfg.Game.RequestRoleQueueCapacity)
 	}
 	if cfg.Game.RequestTimeout.Duration != 5*time.Second {
 		t.Fatalf("unexpected request timeout: %s", cfg.Game.RequestTimeout.Duration)

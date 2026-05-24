@@ -9,7 +9,7 @@
 | 1 | `server-architecture.md` | 服务分层、职责边界、总体架构图 |
 | 2 | `runtime-flows.md` | 登录、连接、路由、命令分发、故障恢复等运行时链路 |
 | 3 | `requirements-design.md` | 全局邮件业务需求、MySQL/Redis/本地缓存/Kafka 设计 |
-| 4 | `request-queue-design.md` | `gamesrv` 请求队列、背压、超时和监控设计 |
+| 4 | `request-queue-design.md` | `gamesrv` 按 `RoleID` 分组的请求队列、背压、超时和监控设计 |
 | 5 | `deployment-plan.md` | 部署拓扑、服务发现、扩缩容、健康检查、容灾 |
 | 6 | `code-structure.md` | 代码目录、分层职责、依赖方向 |
 

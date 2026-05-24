@@ -70,9 +70,10 @@ func main() {
 		log.Fatalf("register mail commands: %v", err)
 	}
 	commandQueue := gamesrv.NewCommandRequestQueue(commandRegistry, gamesrv.CommandQueueOptions{
-		Workers:        cfg.Game.RequestQueueWorkers,
-		Capacity:       cfg.Game.RequestQueueCapacity,
-		RequestTimeout: cfg.Game.RequestTimeout.Duration,
+		Workers:           cfg.Game.RequestQueueWorkers,
+		Capacity:          cfg.Game.RequestQueueCapacity,
+		RoleQueueCapacity: cfg.Game.RequestRoleQueueCapacity,
+		RequestTimeout:    cfg.Game.RequestTimeout.Duration,
 	})
 	defer commandQueue.Close()
 	rpc.RegisterGameCommandServiceServer(grpcServer, gamesrv.NewCommandRPCServerWithDispatcher(commandRegistry, commandQueue))

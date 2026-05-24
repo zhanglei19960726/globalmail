@@ -9,7 +9,7 @@
 | 登录 | Client HTTP `POST /login` -> `accsrv` -> gRPC `gamesrv.GameService.Login` -> Redis `DBLoginToken` |
 | 连接 | Client WebSocket -> `gatesrv` -> Redis 校验 token -> `ConnectionPool` 和 `DBGateConn` |
 | 心跳 | Client -> `GateService.Heartbeat` -> 刷新本机连接状态 -> 节流续期 Redis |
-| 命令 | Client command -> `gatesrv` 路由 -> `gamesrv` 请求队列 -> `CommandRegistry` |
+| 命令 | Client command -> `gatesrv` 路由 -> `gamesrv` 按 `RoleID` 入队 -> `CommandRegistry` |
 | 故障 | 失败清路由、客户端重连、Redis TTL 和 etcd lease 兜底 |
 
 ## 1. 目标
@@ -289,7 +289,8 @@ MailService.DeleteGlobalMail
     -> RouteService.Resolve(uid) 找到目标 gamesrv
     -> 调用目标 gamesrv 的 GameCommandService.Dispatch
     -> GameCommandService.Dispatch
-    -> CommandRequestQueue 入队
+    -> CommandRequestQueue 全局容量检查
+    -> 按 RoleID 进入玩家独立 lane
     -> worker pool 消费
     -> app/gamesrv.CommandRegistry
     -> 按 CommandID 查找已注册 handler
@@ -303,8 +304,11 @@ MailService.DeleteGlobalMail
 
 ```text
 正常:
-    Dispatch 请求进入有界队列。
-    worker 从队列取请求并调用 CommandRegistry。
+    Dispatch 请求先占用全局容量。
+    请求按 RoleID 进入对应玩家 lane。
+    同一 RoleID 的请求 FIFO 串行处理。
+    不同 RoleID 的 lane 可以并行处理。
+    worker 从玩家 lane 取请求并调用 CommandRegistry。
     gRPC 请求等待 worker 返回 CommandResponse。
 
 超时:
@@ -314,10 +318,32 @@ MailService.DeleteGlobalMail
     handler 必须使用 context 调用数据库、Redis、下游 RPC，才能真正停止底层工作。
 
 队列满:
-    不再入队，立即返回 CommandResponse(code=429, message="command queue full")。
+    全局容量满或单个 RoleID lane 满时不再入队。
+    立即返回 CommandResponse(code=429, message="command queue full")。
 
 请求取消:
     客户端或上游 context 取消时，排队等待会尽快返回 context 错误。
+```
+
+RoleID lane 示例：
+
+```text
+RoleID=1001: A1 -> A2 -> A3   # 串行
+RoleID=1002: B1 -> B2         # 串行
+RoleID=1003: C1               # 串行
+
+不同 RoleID 的 A1、B1、C1 可以在 worker 空闲时并行处理。
+同一个 RoleID 的 A2 必须等待 A1 结束，避免同一玩家状态并发写入。
+```
+
+容量判定顺序：
+
+```text
+1. context 是否已取消
+2. CommandRequestQueue 是否关闭
+3. 全局 request_queue_capacity 是否有空位
+4. 当前 RoleID 的 request_role_queue_capacity 是否有空位
+5. 成功进入该玩家 lane
 ```
 
 默认参数：
@@ -325,6 +351,7 @@ MailService.DeleteGlobalMail
 ```text
 game.request_queue_workers: 4
 game.request_queue_capacity: 1024
+game.request_role_queue_capacity: 32
 game.request_timeout: 3s
 ```
 

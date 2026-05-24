@@ -219,7 +219,8 @@ app/gatesrv:
 app/gamesrv:
     实现 GameService.Login。
     实现 GameCommandService 和 CommandRegistry。
-    CommandRequestQueue 在 Dispatch 入口提供本机有界请求队列、worker pool 和队列满背压。
+    CommandRequestQueue 在 Dispatch 入口按 RoleID 分组，提供玩家独立 lane、worker pool 和队列满背压。
+    同一 RoleID 的 lane 内 FIFO 串行，不同 RoleID 的 lane 可并行消费。
     注册 CommandID -> handler。
     实现 MailService 和全局邮件命令 handler。
 ```
@@ -278,6 +279,7 @@ Gate:
 Game:
     game.request_queue_workers
     game.request_queue_capacity
+    game.request_role_queue_capacity
     game.request_timeout
 ```
 
@@ -333,7 +335,7 @@ app/
 │   ├── server.go                  # 游戏业务 RPC 服务组装
 │   ├── account_service.go         # GameService.Login，负责用户获取或创建
 │   ├── command_service.go         # GameCommandService 通用命令分发和注册表，已实现
-│   ├── request_queue.go           # Dispatch 请求队列、worker pool 和队列满背压，已实现
+│   ├── request_queue.go           # Dispatch 按 RoleID 分组请求队列、worker pool 和队列满背压，已实现
 │   ├── mail_commands.go           # 邮件命令字注册和 Any 载荷适配，已实现
 │   ├── mail_handler.go            # 邮件相关协议处理
 │   ├── mail_service.go            # 全局邮件读取、状态合并、读/领/删编排，已实现
