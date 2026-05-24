@@ -41,9 +41,15 @@ globalmail/
 │   │   ├── models.go              # GORM Model 定义
 │   │   ├── mapper.go              # GORM Model 和领域模型转换
 │   │   └── repository.go          # Repository / OutboxRepository 实现
-│   ├── redis/                     # Redis 二级缓存实现，后续接入
+│   ├── redis/                     # Redis 二级缓存实现
+│   │   ├── client.go              # Redis client 初始化
+│   │   └── repository.go          # CacheRepository 实现
 │   ├── localcache/                # gamesrv 本地缓存实现，后续下沉
 │   └── sqlschema/                 # 建表 SQL 常量
+│
+├── infra/
+│   └── kafka/                     # Kafka 事件总线适配
+│       └── producer.go            # EventPublisher 实现
 │
 ├── config/
 │   ├── config.go                  # 第三方组件配置结构和环境变量加载
@@ -81,7 +87,7 @@ globalmail/
 
 - `data/mysql`：使用 GORM 实现 MySQL repository。
 - `data/sqlschema`：保存建表 SQL 常量。
-- `data/redis`：后续实现 Redis 二级缓存。
+- `data/redis`：实现 Redis 二级缓存。
 - `data/localcache`：后续承载 `gamesrv` 本地缓存实现。
 
 `data/mysql` 负责：
@@ -93,7 +99,7 @@ globalmail/
 - 保存玩家全局邮件状态。
 - 扫描 pending outbox，并标记 published 或重试。
 
-`data/redis` 后续负责：
+`data/redis` 负责：
 
 - `GlobalMailVersion`
 - `GlobalMail:{globalMailId}`
@@ -107,9 +113,12 @@ globalmail/
 
 `infra/` 放非 DB/缓存类基础设施适配。
 
-规划职责：
+当前职责：
 
 - `infra/kafka`：Kafka producer、consumer、consumer group 管理。
+
+规划职责：
+
 - `infra/etcd`：服务注册、lease 续租、服务发现和 watch。
 - `infra/lb`：LB 摘除和 drain 操作。
 - `infra/metrics`：指标采集和告警事件。
