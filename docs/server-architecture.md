@@ -72,7 +72,7 @@ flowchart TD
 这张图表达四个核心关系：
 
 - 登录链路：客户端经 LB 到 `accsrv`，登录成功后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
-- 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做 `RouteNode`。
+- 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做一致性哈希 `RouteNode`。
 - 存储链路：运行态热点数据放本地内存和 Redis，账号、玩家、邮件、领取状态等权威数据落 MySQL。
 - 服务发现链路：各服务启动后注册到 etcd，`gatesrv` 通过 etcd watch 得到健康 `gamesrv` 列表。
 - 事件通知链路：管理入口写业务数据和 outbox，`Outbox Relay` 投递 Kafka，`gamesrv` 消费事件刷新本地缓存。
@@ -220,7 +220,7 @@ MySQL    : 账号、玩家、邮件、领取状态等权威数据
 
 - 客户端提交的 UID 不可信，玩家身份必须来自 `DBLoginToken`。
 - `gatesrv` 只保存当前连接态，不承载玩家业务状态。
-- 同一个 UID 尽量固定路由到同一台 `gamesrv`，减少业务状态跨节点同步。
+- 同一个 UID 通过一致性哈希固定路由到同一台 `gamesrv`，减少业务状态跨节点同步，并降低扩缩容时的迁移范围。
 - 跨进程共享的连接位置和路由信息必须有 TTL，避免故障后残留脏数据。
 
 ## 6. 架构边界
@@ -263,7 +263,7 @@ requirements-design.md:
 
 ```text
 客户端 -> LB/入口 -> gatesrv
-gatesrv -> RouteNode -> etcd服务列表 -> gamesrv
+gatesrv -> 一致性哈希RouteNode -> etcd服务列表 -> gamesrv
 mgrsrv  -> etcd服务列表/DBGateConn -> gatesrv或gamesrv
 ```
 

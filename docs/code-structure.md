@@ -48,12 +48,18 @@ globalmail/
 │   └── sqlschema/                 # 建表 SQL 常量
 │
 ├── infra/
-│   └── kafka/                     # Kafka 事件总线适配
-│       └── producer.go            # EventPublisher 实现
+│   ├── kafka/                     # Kafka 事件总线适配
+│   │   └── producer.go            # EventPublisher 实现
+│   └── etcd/                      # etcd 服务注册和发现适配
+│       ├── client.go              # etcd client 初始化
+│       ├── registry.go            # 服务注册、状态更新和摘除
+│       └── discovery.go           # 服务发现和 watch
 │
 ├── config/
-│   ├── config.go                  # 第三方组件配置结构和环境变量加载
+│   ├── config.go                  # 第三方组件配置结构和 YAML 加载
 │   └── config_test.go             # 配置加载测试
+│   └── examples/
+│       └── globalmail.yaml        # YAML 配置示例
 │
 ├── go.mod
 └── README.md
@@ -116,10 +122,10 @@ globalmail/
 当前职责：
 
 - `infra/kafka`：Kafka producer、consumer、consumer group 管理。
+- `infra/etcd`：服务注册、lease 续租、服务发现和 watch。
 
 规划职责：
 
-- `infra/etcd`：服务注册、lease 续租、服务发现和 watch。
 - `infra/lb`：LB 摘除和 drain 操作。
 - `infra/metrics`：指标采集和告警事件。
 
@@ -127,53 +133,55 @@ Kafka、etcd 不放在 `data/`，因为它们不是业务数据存取层，而�
 
 ### 3.4 `config/`
 
-`config/` 是统一配置模块，负责管理服务自身和第三方组件配置。
+`config/` 是统一配置模块，负责从 YAML 文件读取服务自身和第三方组件配置。
 
 当前支持：
 
 ```text
 Service:
-    SERVICE_NAME
-    SERVICE_INSTANCE_ID
-    SERVICE_ENV
-    SERVICE_LISTEN_ADDR
-    SERVICE_PUBLIC_ADDR
+    service.name
+    service.instance_id
+    service.env
+    service.listen_addr
+    service.public_addr
 
 MySQL:
-    MYSQL_DSN
-    MYSQL_MAX_OPEN_CONNS
-    MYSQL_MAX_IDLE_CONNS
-    MYSQL_CONN_MAX_LIFETIME
-    MYSQL_AUTO_MIGRATE
+    mysql.dsn
+    mysql.max_open_conns
+    mysql.max_idle_conns
+    mysql.conn_max_lifetime
+    mysql.auto_migrate
 
 Redis:
-    REDIS_ADDRS
-    REDIS_USERNAME
-    REDIS_PASSWORD
-    REDIS_DB
-    REDIS_KEY_PREFIX
-    REDIS_DIAL_TIMEOUT
-    REDIS_READ_TIMEOUT
-    REDIS_WRITE_TIMEOUT
+    redis.addrs
+    redis.username
+    redis.password
+    redis.db
+    redis.key_prefix
+    redis.dial_timeout
+    redis.read_timeout
+    redis.write_timeout
 
 Kafka:
-    KAFKA_BROKERS
-    KAFKA_TOPIC_PREFIX
-    KAFKA_CONSUMER_GROUP
+    kafka.brokers
+    kafka.topic_prefix
+    kafka.consumer_group
 
 etcd:
-    ETCD_ENDPOINTS
-    ETCD_USERNAME
-    ETCD_PASSWORD
-    ETCD_DIAL_TIMEOUT
-    ETCD_LEASE_TTL
-    ETCD_KEEPALIVE_INTERVAL
-    ETCD_SERVICE_KEY_PREFIX
+    etcd.endpoints
+    etcd.username
+    etcd.password
+    etcd.dial_timeout
+    etcd.lease_ttl
+    etcd.keepalive_interval
+    etcd.service_key_prefix
 ```
 
 使用原则：
 
-- `cmd/*/main.go` 只从 `config.LoadFromEnv()` 获取配置。
+- `cmd/*/main.go` 只从 `config.LoadFile(path)` 获取配置。
+- 配置文件统一使用 YAML 格式，例如 `config/examples/globalmail.yaml`。
+- 运行环境通过启动参数指定配置文件路径，不从环境变量读取第三方组件配置。
 - `app/*` 接收已经组装好的依赖，不直接读取环境变量。
 - `domain/*` 不依赖 `config`，避免业务规则和部署环境耦合。
 - 第三方组件连接初始化由 `data/*` 或 `infra/*` 使用配置完成。
@@ -193,9 +201,9 @@ cmd/
 ├── gamesrv/
 │   └── main.go                    # 玩家业务服务启动入口
 ├── mgrsrv/
-│   └── main.go                    # GM/管理后台服务启动入口
+│   └── main.go                    # GM/管理后台服务启动入口，已实现骨架
 ├── outboxrelay/
-│   └── main.go                    # Outbox Relay 事件投递进程
+│   └── main.go                    # Outbox Relay 事件投递进程，已实现
 └── recovery-controller/
     └── main.go                    # 自动化容灾控制器
 
@@ -208,7 +216,7 @@ app/
 ├── gatesrv/
 │   ├── server.go                  # WebSocket 服务组装
 │   ├── session.go                 # SessPool 和连接管理
-│   ├── router.go                  # UID 到 gamesrv 路由
+│   ├── router.go                  # UID 到 gamesrv 的一致性哈希路由，已实现
 │   └── handler.go                 # 客户端协议处理
 │
 ├── gamesrv/
@@ -219,11 +227,11 @@ app/
 │
 ├── mgrsrv/
 │   ├── server.go                  # 管理后台服务组装
-│   ├── mail_admin.go              # GM 创建/审核/发布全局邮件
+│   ├── mail_admin.go              # GM 创建/审核/发布全局邮件，当前合并在 server.go
 │   └── auth.go                    # 管理后台鉴权
 │
 ├── outboxrelay/
-│   ├── worker.go                  # 扫描 MySQL outbox 并投递 Kafka
+│   ├── worker.go                  # 扫描 MySQL outbox 并投递 Kafka，已实现
 │   └── scheduler.go               # 批量、重试、退避调度
 │
 └── recovery/

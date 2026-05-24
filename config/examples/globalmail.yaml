@@ -1,0 +1,40 @@
+service:
+  name: gamesrv
+  instance_id: gamesrv-local-1
+  env: dev
+  listen_addr: ":8080"
+  public_addr: "127.0.0.1:8080"
+
+mysql:
+  dsn: "user:password@tcp(127.0.0.1:3306)/globalmail?parseTime=true&charset=utf8mb4&loc=Local"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+  auto_migrate: false
+
+redis:
+  addrs:
+    - "127.0.0.1:6379"
+  username: ""
+  password: ""
+  db: 0
+  key_prefix: "rh:"
+  dial_timeout: 3s
+  read_timeout: 2s
+  write_timeout: 2s
+
+kafka:
+  brokers:
+    - "127.0.0.1:9092"
+  topic_prefix: "rh"
+  consumer_group: "gamesrv-local-1"
+
+etcd:
+  endpoints:
+    - "127.0.0.1:2379"
+  username: ""
+  password: ""
+  dial_timeout: 3s
+  lease_ttl: 10s
+  keepalive_interval: 3s
+  service_key_prefix: "/rh/services"

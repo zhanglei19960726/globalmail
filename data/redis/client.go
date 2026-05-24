@@ -12,8 +12,8 @@ func NewClient(cfg config.RedisConfig) goredis.UniversalClient {
 		Username:     cfg.Username,
 		Password:     cfg.Password,
 		DB:           cfg.DB,
-		DialTimeout:  cfg.DialTimeout,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
+		DialTimeout:  cfg.DialTimeout.Duration,
+		ReadTimeout:  cfg.ReadTimeout.Duration,
+		WriteTimeout: cfg.WriteTimeout.Duration,
 	})
 }

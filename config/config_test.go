@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -13,23 +15,34 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Redis.KeyPrefix != "rh:" {
 		t.Fatalf("unexpected redis key prefix: %s", cfg.Redis.KeyPrefix)
 	}
-	if cfg.Etcd.LeaseTTL != 10*time.Second {
-		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL)
+	if cfg.Etcd.LeaseTTL.Duration != 10*time.Second {
+		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL.Duration)
 	}
 }
 
-func TestLoadFromEnvOverridesDefaults(t *testing.T) {
-	t.Setenv("SERVICE_NAME", "gamesrv")
-	t.Setenv("SERVICE_INSTANCE_ID", "gamesrv-1")
-	t.Setenv("MYSQL_DSN", "user:pass@tcp(localhost:3306)/rh")
-	t.Setenv("MYSQL_MAX_OPEN_CONNS", "100")
-	t.Setenv("MYSQL_AUTO_MIGRATE", "true")
-	t.Setenv("REDIS_ADDRS", "redis-1:6379,redis-2:6379")
-	t.Setenv("KAFKA_BROKERS", "kafka-1:9092,kafka-2:9092")
-	t.Setenv("ETCD_ENDPOINTS", "etcd-1:2379,etcd-2:2379")
-	t.Setenv("ETCD_LEASE_TTL", "15s")
-
-	cfg, err := LoadFromEnv()
+func TestLoadBytesOverridesDefaults(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+service:
+  name: gamesrv
+  instance_id: gamesrv-1
+mysql:
+  dsn: user:pass@tcp(localhost:3306)/rh
+  max_open_conns: 100
+  auto_migrate: true
+redis:
+  addrs:
+    - redis-1:6379
+    - redis-2:6379
+kafka:
+  brokers:
+    - kafka-1:9092
+    - kafka-2:9092
+etcd:
+  endpoints:
+    - etcd-1:2379
+    - etcd-2:2379
+  lease_ttl: 15s
+`))
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
 	}
@@ -51,8 +64,31 @@ func TestLoadFromEnvOverridesDefaults(t *testing.T) {
 	if len(cfg.Kafka.Brokers) != 2 {
 		t.Fatalf("expected two kafka brokers, got %d", len(cfg.Kafka.Brokers))
 	}
-	if cfg.Etcd.LeaseTTL != 15*time.Second {
-		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL)
+	if cfg.Etcd.LeaseTTL.Duration != 15*time.Second {
+		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL.Duration)
+	}
+	if cfg.Redis.KeyPrefix != "rh:" {
+		t.Fatalf("expected default redis key prefix, got %s", cfg.Redis.KeyPrefix)
+	}
+}
+
+func TestLoadFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+service:
+  name: mgrsrv
+  instance_id: mgrsrv-1
+`), 0600); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("load config file failed: %v", err)
+	}
+	if cfg.Service.Name != "mgrsrv" {
+		t.Fatalf("unexpected service name: %s", cfg.Service.Name)
 	}
 }
 

@@ -3,60 +3,80 @@ package config
 import (
 	"errors"
 	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
+type Duration struct {
+	time.Duration
+}
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		parsed, err := time.ParseDuration(value.Value)
+		if err == nil {
+			d.Duration = parsed
+			return nil
+		}
+	}
+	var seconds int64
+	if err := value.Decode(&seconds); err != nil {
+		return err
+	}
+	d.Duration = time.Duration(seconds) * time.Second
+	return nil
+}
+
 type Config struct {
-	Service ServiceConfig
-	MySQL   MySQLConfig
-	Redis   RedisConfig
-	Kafka   KafkaConfig
-	Etcd    EtcdConfig
+	Service ServiceConfig `yaml:"service"`
+	MySQL   MySQLConfig   `yaml:"mysql"`
+	Redis   RedisConfig   `yaml:"redis"`
+	Kafka   KafkaConfig   `yaml:"kafka"`
+	Etcd    EtcdConfig    `yaml:"etcd"`
 }
 
 type ServiceConfig struct {
-	Name       string
-	InstanceID string
-	Env        string
-	ListenAddr string
-	PublicAddr string
+	Name       string `yaml:"name"`
+	InstanceID string `yaml:"instance_id"`
+	Env        string `yaml:"env"`
+	ListenAddr string `yaml:"listen_addr"`
+	PublicAddr string `yaml:"public_addr"`
 }
 
 type MySQLConfig struct {
-	DSN             string
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
-	AutoMigrate     bool
+	DSN             string   `yaml:"dsn"`
+	MaxOpenConns    int      `yaml:"max_open_conns"`
+	MaxIdleConns    int      `yaml:"max_idle_conns"`
+	ConnMaxLifetime Duration `yaml:"conn_max_lifetime"`
+	AutoMigrate     bool     `yaml:"auto_migrate"`
 }
 
 type RedisConfig struct {
-	Addrs        []string
-	Username     string
-	Password     string
-	DB           int
-	KeyPrefix    string
-	DialTimeout  time.Duration
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Addrs        []string `yaml:"addrs"`
+	Username     string   `yaml:"username"`
+	Password     string   `yaml:"password"`
+	DB           int      `yaml:"db"`
+	KeyPrefix    string   `yaml:"key_prefix"`
+	DialTimeout  Duration `yaml:"dial_timeout"`
+	ReadTimeout  Duration `yaml:"read_timeout"`
+	WriteTimeout Duration `yaml:"write_timeout"`
 }
 
 type KafkaConfig struct {
-	Brokers       []string
-	TopicPrefix   string
-	ConsumerGroup string
+	Brokers       []string `yaml:"brokers"`
+	TopicPrefix   string   `yaml:"topic_prefix"`
+	ConsumerGroup string   `yaml:"consumer_group"`
 }
 
 type EtcdConfig struct {
-	Endpoints         []string
-	Username          string
-	Password          string
-	DialTimeout       time.Duration
-	LeaseTTL          time.Duration
-	KeepAliveInterval time.Duration
-	ServiceKeyPrefix  string
+	Endpoints         []string `yaml:"endpoints"`
+	Username          string   `yaml:"username"`
+	Password          string   `yaml:"password"`
+	DialTimeout       Duration `yaml:"dial_timeout"`
+	LeaseTTL          Duration `yaml:"lease_ttl"`
+	KeepAliveInterval Duration `yaml:"keepalive_interval"`
+	ServiceKeyPrefix  string   `yaml:"service_key_prefix"`
 }
 
 func Default() Config {
@@ -71,14 +91,14 @@ func Default() Config {
 		MySQL: MySQLConfig{
 			MaxOpenConns:    50,
 			MaxIdleConns:    10,
-			ConnMaxLifetime: time.Hour,
+			ConnMaxLifetime: Duration{Duration: time.Hour},
 		},
 		Redis: RedisConfig{
 			Addrs:        []string{"127.0.0.1:6379"},
 			KeyPrefix:    "rh:",
-			DialTimeout:  3 * time.Second,
-			ReadTimeout:  2 * time.Second,
-			WriteTimeout: 2 * time.Second,
+			DialTimeout:  Duration{Duration: 3 * time.Second},
+			ReadTimeout:  Duration{Duration: 2 * time.Second},
+			WriteTimeout: Duration{Duration: 2 * time.Second},
 		},
 		Kafka: KafkaConfig{
 			Brokers:     []string{"127.0.0.1:9092"},
@@ -86,50 +106,27 @@ func Default() Config {
 		},
 		Etcd: EtcdConfig{
 			Endpoints:         []string{"127.0.0.1:2379"},
-			DialTimeout:       3 * time.Second,
-			LeaseTTL:          10 * time.Second,
-			KeepAliveInterval: 3 * time.Second,
+			DialTimeout:       Duration{Duration: 3 * time.Second},
+			LeaseTTL:          Duration{Duration: 10 * time.Second},
+			KeepAliveInterval: Duration{Duration: 3 * time.Second},
 			ServiceKeyPrefix:  "/rh/services",
 		},
 	}
 }
 
-func LoadFromEnv() (Config, error) {
+func LoadFile(path string) (Config, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	return LoadBytes(payload)
+}
+
+func LoadBytes(payload []byte) (Config, error) {
 	cfg := Default()
-
-	cfg.Service.Name = envString("SERVICE_NAME", cfg.Service.Name)
-	cfg.Service.InstanceID = envString("SERVICE_INSTANCE_ID", cfg.Service.InstanceID)
-	cfg.Service.Env = envString("SERVICE_ENV", cfg.Service.Env)
-	cfg.Service.ListenAddr = envString("SERVICE_LISTEN_ADDR", cfg.Service.ListenAddr)
-	cfg.Service.PublicAddr = envString("SERVICE_PUBLIC_ADDR", cfg.Service.PublicAddr)
-
-	cfg.MySQL.DSN = envString("MYSQL_DSN", cfg.MySQL.DSN)
-	cfg.MySQL.MaxOpenConns = envInt("MYSQL_MAX_OPEN_CONNS", cfg.MySQL.MaxOpenConns)
-	cfg.MySQL.MaxIdleConns = envInt("MYSQL_MAX_IDLE_CONNS", cfg.MySQL.MaxIdleConns)
-	cfg.MySQL.ConnMaxLifetime = envDuration("MYSQL_CONN_MAX_LIFETIME", cfg.MySQL.ConnMaxLifetime)
-	cfg.MySQL.AutoMigrate = envBool("MYSQL_AUTO_MIGRATE", cfg.MySQL.AutoMigrate)
-
-	cfg.Redis.Addrs = envCSV("REDIS_ADDRS", cfg.Redis.Addrs)
-	cfg.Redis.Username = envString("REDIS_USERNAME", cfg.Redis.Username)
-	cfg.Redis.Password = envString("REDIS_PASSWORD", cfg.Redis.Password)
-	cfg.Redis.DB = envInt("REDIS_DB", cfg.Redis.DB)
-	cfg.Redis.KeyPrefix = envString("REDIS_KEY_PREFIX", cfg.Redis.KeyPrefix)
-	cfg.Redis.DialTimeout = envDuration("REDIS_DIAL_TIMEOUT", cfg.Redis.DialTimeout)
-	cfg.Redis.ReadTimeout = envDuration("REDIS_READ_TIMEOUT", cfg.Redis.ReadTimeout)
-	cfg.Redis.WriteTimeout = envDuration("REDIS_WRITE_TIMEOUT", cfg.Redis.WriteTimeout)
-
-	cfg.Kafka.Brokers = envCSV("KAFKA_BROKERS", cfg.Kafka.Brokers)
-	cfg.Kafka.TopicPrefix = envString("KAFKA_TOPIC_PREFIX", cfg.Kafka.TopicPrefix)
-	cfg.Kafka.ConsumerGroup = envString("KAFKA_CONSUMER_GROUP", cfg.Kafka.ConsumerGroup)
-
-	cfg.Etcd.Endpoints = envCSV("ETCD_ENDPOINTS", cfg.Etcd.Endpoints)
-	cfg.Etcd.Username = envString("ETCD_USERNAME", cfg.Etcd.Username)
-	cfg.Etcd.Password = envString("ETCD_PASSWORD", cfg.Etcd.Password)
-	cfg.Etcd.DialTimeout = envDuration("ETCD_DIAL_TIMEOUT", cfg.Etcd.DialTimeout)
-	cfg.Etcd.LeaseTTL = envDuration("ETCD_LEASE_TTL", cfg.Etcd.LeaseTTL)
-	cfg.Etcd.KeepAliveInterval = envDuration("ETCD_KEEPALIVE_INTERVAL", cfg.Etcd.KeepAliveInterval)
-	cfg.Etcd.ServiceKeyPrefix = envString("ETCD_SERVICE_KEY_PREFIX", cfg.Etcd.ServiceKeyPrefix)
-
+	if err := yaml.Unmarshal(payload, &cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, cfg.Validate()
 }
 
@@ -152,73 +149,11 @@ func (c Config) Validate() error {
 	if len(c.Etcd.Endpoints) == 0 {
 		return errors.New("etcd endpoints are required")
 	}
-	if c.Etcd.LeaseTTL <= 0 {
+	if c.Etcd.LeaseTTL.Duration <= 0 {
 		return errors.New("etcd lease ttl must be positive")
 	}
-	if c.Etcd.KeepAliveInterval <= 0 {
+	if c.Etcd.KeepAliveInterval.Duration <= 0 {
 		return errors.New("etcd keepalive interval must be positive")
 	}
 	return nil
-}
-
-func envString(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func envCSV(key string, fallback []string) []string {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	if len(out) == 0 {
-		return fallback
-	}
-	return out
-}
-
-func envInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }

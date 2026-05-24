@@ -72,13 +72,31 @@ flowchart TD
     req[玩家业务包到gate] --> memoryRoute{session内存有gamesrv地址}
     memoryRoute -->|有| sendOld[SendPktToAddr发到原gamesrv]
     sendOld --> refresh[定期刷新DBSrvRouter]
-    memoryRoute -->|没有或失效| routeNode[RouteNode按UID选择gamesrv]
+    memoryRoute -->|没有或失效| routeNode[RouteNode按UID一致性哈希选择gamesrv]
     routeNode --> sendNew[发送到新gamesrv]
     sendNew --> saveMemory[写session内存route]
     saveMemory --> saveDB[写DBSrvRouter到Redis]
 ```
 
-`RouteNode` 不直接写死 `gamesrv` 地址，而是读取由 etcd watch 维护的本地健康实例列表，再按 UID 选择目标节点。
+`RouteNode` 不直接写死 `gamesrv` 地址，而是读取由 etcd watch 维护的本地健康实例列表，再按 UID 做一致性哈希选择目标节点。
+
+一致性哈希规则：
+
+```text
+1. gatesrv watch etcd，维护 ready gamesrv 实例列表。
+2. 每个 gamesrv 按 instance_id 生成多个虚拟节点。
+3. UID 计算 hash 后在哈希环上顺时针找到第一个虚拟节点。
+4. 命中的虚拟节点对应的真实 gamesrv 即为目标节点。
+5. gamesrv 扩缩容时，只迁移落在相邻区间内的一部分 UID。
+```
+
+路由优先级：
+
+```text
+session route
+    -> Redis DBSrvRouter:{UID}
+    -> ConsistentHash(UID, healthyGamesrvList)
+```
 
 `DBSrvRouter` 用于跨进程共享玩家后端路由：
 
