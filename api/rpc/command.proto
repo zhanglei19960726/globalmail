@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package globalmail.rpc;
+
+import "google/protobuf/any.proto";
+
+option go_package = "globalmail/api/rpc;rpc";
+
+service GameCommandService {
+  rpc Dispatch(CommandRequest) returns (CommandResponse);
+  rpc ListCommands(ListCommandsRequest) returns (ListCommandsResponse);
+}
+
+enum CommandID {
+  COMMAND_ID_UNSPECIFIED = 0;
+  COMMAND_ID_MAIL_LIST_GLOBAL = 1001;
+  COMMAND_ID_MAIL_MARK_READ = 1002;
+  COMMAND_ID_MAIL_CLAIM = 1003;
+  COMMAND_ID_MAIL_DELETE = 1004;
+}
+
+message CommandRequest {
+  CommandID command_id = 1;
+  int64 uid = 2;
+  int64 role_id = 3;
+  int32 server_id = 4;
+  int64 seq = 5;
+  google.protobuf.Any payload = 6;
+}
+
+message CommandResponse {
+  CommandID command_id = 1;
+  int64 seq = 2;
+  int32 code = 3;
+  string message = 4;
+  google.protobuf.Any payload = 5;
+}
+
+message CommandDefinition {
+  CommandID command_id = 1;
+  string name = 2;
+  string request_type = 3;
+  string response_type = 4;
+}
+
+message ListCommandsRequest {}
+
+message ListCommandsResponse {
+  repeated CommandDefinition commands = 1;
+}

@@ -2,15 +2,17 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log"
-	"net/http"
+	"net"
 
+	"globalmail/api/rpc"
 	"globalmail/app/bootstrap"
 	"globalmail/app/gatesrv"
 	redisdata "globalmail/data/redis"
 	infraetcd "globalmail/infra/etcd"
+
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -54,22 +56,20 @@ func main() {
 
 	provider := gatesrv.NewEtcdGameServerProvider(registry)
 	routeService := gatesrv.NewRouteService(routeStore, provider, cfg.Gate.RouteTTL.Duration, cfg.Gate.VirtualNodes)
-	server := &http.Server{
-		Addr:    cfg.Service.ListenAddr,
-		Handler: gatesrv.NewServer(routeService).Handler(),
+	server := grpc.NewServer()
+	rpc.RegisterGateServiceServer(server, gatesrv.NewServer(routeService))
+	listener, err := net.Listen("tcp", cfg.Service.ListenAddr)
+	if err != nil {
+		log.Fatalf("listen gatesrv: %v", err)
 	}
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Etcd.KeepAliveInterval.Duration)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("shutdown gatesrv: %v", err)
-		}
+		server.GracefulStop()
 	}()
 
-	log.Printf("gatesrv %s listening on %s", cfg.Service.InstanceID, cfg.Service.ListenAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("listen gatesrv: %v", err)
+	log.Printf("gatesrv %s grpc listening on %s", cfg.Service.InstanceID, cfg.Service.ListenAddr)
+	if err := server.Serve(listener); err != nil {
+		log.Fatalf("serve gatesrv: %v", err)
 	}
 }

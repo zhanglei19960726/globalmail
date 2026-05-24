@@ -63,3 +63,43 @@ func TestMailRPCServerListGlobalMails(t *testing.T) {
 		t.Fatalf("expected claimed loot indexes, got %+v", mail.GetClaimedLootIndexes())
 	}
 }
+
+func TestMailRPCServerClaimGlobalMail(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeMailRepository{
+		mails: []globalmail.GlobalMail{
+			{
+				ID:         10,
+				Status:     globalmail.MailStatusPublished,
+				StartTime:  now.Add(-time.Hour),
+				ExpireTime: now.Add(time.Hour),
+			},
+		},
+		states: map[int64]globalmail.UserGlobalMailState{},
+	}
+	cacheRepo := &fakeCacheRepository{version: 1}
+	localCache := globalmail.NewLocalCache(repo, cacheRepo)
+	if err := localCache.ForceRefresh(context.Background()); err != nil {
+		t.Fatalf("refresh cache failed: %v", err)
+	}
+	server := NewMailRPCServer(NewMailService(repo, localCache))
+
+	resp, err := server.ClaimGlobalMail(context.Background(), &rpc.ClaimGlobalMailRequest{
+		Profile: &rpc.UserProfile{
+			Uid:      10001,
+			RoleId:   10001,
+			ServerId: 1,
+		},
+		GlobalMailId: 10,
+		LootIndexes:  []int32{1},
+	})
+	if err != nil {
+		t.Fatalf("claim global mail failed: %v", err)
+	}
+	if resp.GetStatus() != string(globalmail.UserMailStatusClaimed) {
+		t.Fatalf("unexpected status: %s", resp.GetStatus())
+	}
+	if len(resp.GetClaimedLootIndexes()) != 1 || resp.GetClaimedLootIndexes()[0] != 1 {
+		t.Fatalf("unexpected claimed loot indexes: %+v", resp.GetClaimedLootIndexes())
+	}
+}

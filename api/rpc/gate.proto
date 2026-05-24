@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package globalmail.rpc;
+
+option go_package = "globalmail/api/rpc;rpc";
+
+service GateService {
+  rpc ResolveRoute(RouteRequest) returns (RouteResponse);
+  rpc ClearRoute(RouteRequest) returns (ClearRouteResponse);
+}
+
+message RouteRequest {
+  int64 uid = 1;
+}
+
+message RouteResponse {
+  string instance_id = 1;
+  string grpc_addr = 2;
+  string frpc_addr = 3;
+  int32 weight = 4;
+}
+
+message ClearRouteResponse {
+  bool ok = 1;
+}

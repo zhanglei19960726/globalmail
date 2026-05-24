@@ -73,13 +73,54 @@ flowchart TD
 
 - 登录链路：客户端经 LB 通过 gRPC 调用 `accsrv`，`accsrv` 转发到 `gamesrv` 处理用户注册/用户资料，随后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
 - 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做一致性哈希 `RouteNode`。
+- 命令分发链路：`gatesrv` 从客户端业务包解析出 protobuf `CommandID`，按 UID 选择目标 `gamesrv`，再调用目标 `gamesrv` 的 `GameCommandService.Dispatch`；`gamesrv` 内部通过命令注册表找到真正的业务 handler。
 - 存储链路：运行态热点数据放本地内存和 Redis，账号、玩家、邮件、领取状态等权威数据落 MySQL。
 - 服务发现链路：各服务启动后注册到 etcd，`gatesrv` 通过 etcd watch 得到健康 `gamesrv` 列表。
 - 事件通知链路：管理入口写业务数据和 outbox，`Outbox Relay` 投递 Kafka，`gamesrv` 消费事件刷新本地缓存。
 
-## 3. 为什么拆分服务
+## 3. 整体设计思路
 
-### 3.1 按压力模型拆分
+整体采用“接入层轻量转发，业务层集中处理”的思路。`accsrv`、`gatesrv` 都只处理连接、鉴权、身份恢复、路由和转发等接入问题，玩家注册、玩家资料、邮件读取、邮件领取等业务状态统一落到 `gamesrv`。
+
+协议上统一使用 protobuf 定义 service、请求和回包，并生成 Go 代码。这样客户端、`gatesrv`、`gamesrv` 使用同一份协议契约，避免手写结构体和命令字分散在多个包里。当前协议边界如下：
+
+```text
+api/rpc/login.proto:
+    AccService.Login
+    GameService.Login
+
+api/rpc/gate.proto:
+    GateService.ResolveRoute
+    GateService.ClearRoute
+
+api/rpc/command.proto:
+    CommandID
+    GameCommandService.Dispatch
+    GameCommandService.ListCommands
+
+api/rpc/mail.proto:
+    MailService.ListGlobalMails
+    MailService.MarkGlobalMailRead
+    MailService.ClaimGlobalMail
+    MailService.DeleteGlobalMail
+```
+
+命令字不再由业务代码手写常量，而是在 `command.proto` 里定义 `CommandID` 枚举。`gatesrv` 解析客户端业务包后只拿到 `CommandID`、可信 `UID/RoleID/ServerID` 和 protobuf `Any` 载荷，不直接执行业务规则。它先通过 `RouteService.Resolve(uid)` 找到目标 `gamesrv`，再转发到 `GameCommandService.Dispatch`。
+
+`gamesrv` 启动时把 `CommandID` 注册到 `CommandRegistry`。注册项包含命令字、命令名、请求类型、回包类型和 handler。`Dispatch` 收到请求后按 `CommandID` 找到 handler，再由 handler 反序列化 `Any` 载荷并调用具体业务服务。例如全局邮件当前注册为：
+
+```text
+COMMAND_ID_MAIL_LIST_GLOBAL -> MailRPCServer.ListGlobalMails
+COMMAND_ID_MAIL_MARK_READ   -> MailRPCServer.MarkGlobalMailRead
+COMMAND_ID_MAIL_CLAIM       -> MailRPCServer.ClaimGlobalMail
+COMMAND_ID_MAIL_DELETE      -> MailRPCServer.DeleteGlobalMail
+```
+
+路由失败或目标 `gamesrv` 调用失败时，`gatesrv` 会清理当前 UID 的本机 session route 和 Redis `DBSrvRouter:{UID}`，下一次请求重新根据 etcd ready gamesrv 列表和一致性哈希选择目标节点。
+
+## 4. 为什么拆分服务
+
+### 4.1 按压力模型拆分
 
 不同请求的压力模型不一样：
 
@@ -99,7 +140,7 @@ flowchart TD
 
 拆分后可以单独扩容。例如登录高峰只扩 `accsrv`，在线人数增长主要扩 `gatesrv`，业务 CPU 压力升高主要扩 `gamesrv`。
 
-### 3.2 按职责边界拆分
+### 4.2 按职责边界拆分
 
 拆分后每层只处理自己的问题：
 
@@ -108,11 +149,11 @@ flowchart TD
 - `gamesrv` 只负责处理“这个玩家的业务怎么执行”。
 - `mgrsrv` 只负责内部管理操作，不混入玩家连接入口。
 
-服务间和客户端交互协议统一使用 gRPC，service、请求和回包结构通过 protobuf 定义并生成 Go 代码；当前登录链路定义在 `api/rpc/login.proto`，全局邮件读取定义在 `api/rpc/mail.proto`。
+服务间和客户端交互协议统一使用 gRPC，service、请求和回包结构通过 protobuf 定义并生成 Go 代码；当前登录链路定义在 `api/rpc/login.proto`，网关路由接口定义在 `api/rpc/gate.proto`，gamesrv 通用命令字和注册表定义在 `api/rpc/command.proto`，全局邮件读取和读/领/删状态接口定义在 `api/rpc/mail.proto`。
 
 这样可以避免一个服务同时承担鉴权、连接、业务和管理逻辑，降低发布和排障复杂度。
 
-### 3.3 按故障半径拆分
+### 4.3 按故障半径拆分
 
 拆分服务后，单类故障不会直接拖垮所有能力：
 
@@ -121,7 +162,7 @@ flowchart TD
 - 单台 `gamesrv` 异常只影响被路由到该节点的玩家请求，gate 可以清理路由后重新选服。
 - `mgrsrv` 异常不应该影响玩家主链路。
 
-## 4. 服务分层
+## 5. 服务分层
 
 ```text
 accsrv   : 登录鉴权，创建账号，签发 SessionKey/token
@@ -130,7 +171,7 @@ gamesrv  : 处理玩家业务逻辑
 mgrsrv   : 管理后台或内部管理请求入口
 ```
 
-### 4.1 accsrv 登录鉴权层
+### 5.1 accsrv 登录鉴权层
 
 `accsrv` 的作用是把外部登录凭证转换成服务端可信身份。
 
@@ -147,7 +188,7 @@ mgrsrv   : 管理后台或内部管理请求入口
 - 不处理玩家业务逻辑。
 - 不相信客户端自带 UID。
 
-### 4.2 gatesrv 长连接接入层
+### 5.2 gatesrv 长连接接入层
 
 `gatesrv` 的作用是承接客户端连接，并把客户端请求转成可信的服务端请求。
 
@@ -166,7 +207,7 @@ mgrsrv   : 管理后台或内部管理请求入口
 - 不保存玩家业务状态。
 - 不直接决定业务规则。
 
-### 4.3 gamesrv 业务逻辑层
+### 5.3 gamesrv 业务逻辑层
 
 `gamesrv` 的作用是处理玩家业务，承接真正的游戏逻辑和数据读写。
 
@@ -183,7 +224,7 @@ mgrsrv   : 管理后台或内部管理请求入口
 - 不信任客户端身份，只信任 gate 转发后的服务端上下文。
 - 不处理服务入口分流。
 
-### 4.4 mgrsrv 管理入口层
+### 5.4 mgrsrv 管理入口层
 
 `mgrsrv` 的作用是承接内部管理操作，让管理流量和玩家主链路隔离。
 
@@ -198,7 +239,7 @@ mgrsrv   : 管理后台或内部管理请求入口
 - 不作为玩家长连接入口。
 - 不绕过业务校验直接改玩家关键状态。
 
-## 5. 核心数据归属
+## 6. 核心数据归属
 
 核心数据：
 
@@ -225,7 +266,7 @@ MySQL    : 账号、玩家、邮件、领取状态等权威数据
 - 同一个 UID 通过一致性哈希固定路由到同一台 `gamesrv`，减少业务状态跨节点同步，并降低扩缩容时的迁移范围。
 - 跨进程共享的连接位置和路由信息必须有 TTL，避免故障后残留脏数据。
 
-## 6. 架构边界
+## 7. 架构边界
 
 架构文档只定义边界和职责，具体流程拆到其他文档：
 
@@ -251,7 +292,7 @@ requirements-design.md:
     领取幂等
 ```
 
-## 7. 服务发现边界
+## 8. 服务发现边界
 
 服务注册和发现统一使用 etcd。服务器架构只依赖服务发现抽象，底层由 etcd 保存实例地址、租约和健康状态。
 
@@ -271,7 +312,7 @@ mgrsrv  -> etcd服务列表/DBGateConn -> gatesrv或gamesrv
 
 具体注册、探活和发布流程由部署方案定义。
 
-## 8. 推荐分层
+## 9. 推荐分层
 
 ```text
 MySQL:

@@ -2,16 +2,17 @@ package gatesrv
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"strconv"
+
+	"globalmail/api/rpc"
 )
 
 type UIDRouter interface {
 	Resolve(ctx context.Context, uid int64) (GameServerInstance, error)
+	Clear(ctx context.Context, uid int64) error
 }
 
 type Server struct {
+	rpc.UnimplementedGateServiceServer
 	router UIDRouter
 }
 
@@ -19,34 +20,22 @@ func NewServer(router UIDRouter) *Server {
 	return &Server{router: router}
 }
 
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.handleHealthz)
-	mux.HandleFunc("/route", s.handleRoute)
-	return mux
-}
-
-func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
-func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
-	uid, err := strconv.ParseInt(r.URL.Query().Get("uid"), 10, 64)
-	if err != nil || uid <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid uid"})
-		return
-	}
-	route, err := s.router.Resolve(r.Context(), uid)
+func (s *Server) ResolveRoute(ctx context.Context, req *rpc.RouteRequest) (*rpc.RouteResponse, error) {
+	route, err := s.router.Resolve(ctx, req.GetUid())
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, route)
+	return &rpc.RouteResponse{
+		InstanceId: route.InstanceID,
+		GrpcAddr:   route.GrpcAddr,
+		FrpcAddr:   route.FrpcAddr,
+		Weight:     int32(route.Weight),
+	}, nil
 }
 
-func writeJSON(w http.ResponseWriter, status int, value interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+func (s *Server) ClearRoute(ctx context.Context, req *rpc.RouteRequest) (*rpc.ClearRouteResponse, error) {
+	if err := s.router.Clear(ctx, req.GetUid()); err != nil {
+		return nil, err
+	}
+	return &rpc.ClearRouteResponse{Ok: true}, nil
 }

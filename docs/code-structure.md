@@ -29,6 +29,8 @@ globalmail/
 ├── api/
 │   └── rpc/
 │       ├── login.proto            # AccService/GameService 登录协议定义
+│       ├── gate.proto             # GateService 路由查询和清理协议定义
+│       ├── command.proto          # GameCommandService 和 CommandID 命令字定义
 │       ├── mail.proto             # MailService 全局邮件读取协议定义
 │       ├── *.pb.go                # protoc-gen-go 生成的请求/回包结构
 │       └── *_grpc.pb.go           # protoc-gen-go-grpc 生成的 gRPC service
@@ -78,6 +80,40 @@ globalmail/
 ```
 
 ## 3. 分层职责
+
+### 3.0 `api/rpc/`
+
+`api/rpc/` 是客户端和服务端、服务和服务之间的协议契约层。所有 gRPC service、请求、回包和命令字都先在 `.proto` 中定义，再通过 `protoc-gen-go` 和 `protoc-gen-go-grpc` 生成 Go 代码。
+
+当前职责：
+
+```text
+login.proto:
+    AccService/Login
+    GameService/Login
+
+gate.proto:
+    GateService/ResolveRoute
+    GateService/ClearRoute
+
+command.proto:
+    CommandID
+    GameCommandService/Dispatch
+    GameCommandService/ListCommands
+
+mail.proto:
+    MailService/ListGlobalMails
+    MailService/MarkGlobalMailRead
+    MailService/ClaimGlobalMail
+    MailService/DeleteGlobalMail
+```
+
+使用原则：
+
+- 不在业务代码中手写命令字常量，新增命令先扩展 `CommandID`。
+- 不在 `app/*` 中自定义重复的请求/回包结构，优先使用 protobuf 生成结构。
+- `gatesrv` 只解析 `CommandID` 和透传 protobuf `Any` 载荷，不解析具体业务字段。
+- `gamesrv` 通过 `CommandRegistry` 把 `CommandID` 映射到具体 handler。
 
 ### 3.1 `domain/`
 
@@ -146,7 +182,29 @@ globalmail/
 
 Kafka、etcd 不放在 `data/`，因为它们不是业务数据存取层，而是事件总线和服务治理基础设施。
 
-### 3.4 `config/`
+### 3.4 `app/`
+
+`app/` 是各服务的应用层编排，负责把协议层、领域层、数据层和基础设施适配层组装成服务能力。
+
+当前重点：
+
+```text
+app/accsrv:
+    实现 AccService.Login。
+    登录时调用 gamesrv GameService.Login 获取或创建用户，再写 DBLoginToken。
+
+app/gatesrv:
+    实现 GateService 路由查询和清理。
+    CommandForwarder 解析 CommandRequest，按 UID Resolve 到 gamesrv，再调用 GameCommandService.Dispatch。
+
+app/gamesrv:
+    实现 GameService.Login。
+    实现 GameCommandService 和 CommandRegistry。
+    注册 CommandID -> handler。
+    实现 MailService 和全局邮件命令 handler。
+```
+
+### 3.5 `config/`
 
 `config/` 是统一配置模块，负责从 YAML 文件读取服务自身和第三方组件配置。
 
@@ -232,7 +290,8 @@ app/
 │   └── service.go                 # 登录业务编排，转发 gamesrv 后写 DBLoginToken
 │
 ├── gatesrv/
-│   ├── server.go                  # HTTP/WebSocket 服务组装，已实现路由查询骨架
+│   ├── server.go                  # gRPC GateService 路由查询/清理适配层，已实现
+│   ├── command_forwarder.go       # 解析 CommandRequest 后转发到目标 gamesrv Dispatch，已实现
 │   ├── session.go                 # SessPool 路由缓存，已实现
 │   ├── router.go                  # UID 到 gamesrv 的一致性哈希路由，已实现
 │   ├── route_service.go           # session route、Redis route、etcd list 串联，已实现
@@ -242,9 +301,11 @@ app/
 ├── gamesrv/
 │   ├── server.go                  # 游戏业务 RPC 服务组装
 │   ├── account_service.go         # GameService.Login，负责用户获取或创建
+│   ├── command_service.go         # GameCommandService 通用命令分发和注册表，已实现
+│   ├── mail_commands.go           # 邮件命令字注册和 Any 载荷适配，已实现
 │   ├── mail_handler.go            # 邮件相关协议处理
-│   ├── mail_service.go            # 全局邮件读取、状态合并编排，已实现
-│   ├── mail_rpc.go                # MailService gRPC 适配层，已实现
+│   ├── mail_service.go            # 全局邮件读取、状态合并、读/领/删编排，已实现
+│   ├── mail_rpc.go                # MailService gRPC 读取和状态接口适配层，已实现
 │   └── event_consumer.go          # Kafka 事件消费并刷新本地缓存，已实现
 │
 ├── mgrsrv/

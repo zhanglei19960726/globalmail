@@ -63,7 +63,13 @@ func main() {
 	}
 	grpcServer := grpc.NewServer()
 	rpc.RegisterGameServiceServer(grpcServer, gamesrv.NewAccountService(gamesrv.NewMemoryUserRepository()))
-	rpc.RegisterMailServiceServer(grpcServer, gamesrv.NewMailRPCServer(mailService))
+	mailRPCServer := gamesrv.NewMailRPCServer(mailService)
+	rpc.RegisterMailServiceServer(grpcServer, mailRPCServer)
+	commandRegistry := gamesrv.NewCommandRegistry()
+	if err := gamesrv.RegisterMailCommandHandlers(commandRegistry, mailRPCServer); err != nil {
+		log.Fatalf("register mail commands: %v", err)
+	}
+	rpc.RegisterGameCommandServiceServer(grpcServer, gamesrv.NewCommandRPCServer(commandRegistry))
 
 	etcdClient, err := infraetcd.NewClient(cfg.Etcd)
 	if err != nil {

@@ -19,7 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	MailService_ListGlobalMails_FullMethodName = "/globalmail.rpc.MailService/ListGlobalMails"
+	MailService_ListGlobalMails_FullMethodName    = "/globalmail.rpc.MailService/ListGlobalMails"
+	MailService_MarkGlobalMailRead_FullMethodName = "/globalmail.rpc.MailService/MarkGlobalMailRead"
+	MailService_ClaimGlobalMail_FullMethodName    = "/globalmail.rpc.MailService/ClaimGlobalMail"
+	MailService_DeleteGlobalMail_FullMethodName   = "/globalmail.rpc.MailService/DeleteGlobalMail"
 )
 
 // MailServiceClient is the client API for MailService service.
@@ -27,6 +30,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MailServiceClient interface {
 	ListGlobalMails(ctx context.Context, in *ListGlobalMailsRequest, opts ...grpc.CallOption) (*ListGlobalMailsResponse, error)
+	MarkGlobalMailRead(ctx context.Context, in *GlobalMailStateRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error)
+	ClaimGlobalMail(ctx context.Context, in *ClaimGlobalMailRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error)
+	DeleteGlobalMail(ctx context.Context, in *GlobalMailStateRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error)
 }
 
 type mailServiceClient struct {
@@ -46,11 +52,41 @@ func (c *mailServiceClient) ListGlobalMails(ctx context.Context, in *ListGlobalM
 	return out, nil
 }
 
+func (c *mailServiceClient) MarkGlobalMailRead(ctx context.Context, in *GlobalMailStateRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error) {
+	out := new(GlobalMailStateResponse)
+	err := c.cc.Invoke(ctx, MailService_MarkGlobalMailRead_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mailServiceClient) ClaimGlobalMail(ctx context.Context, in *ClaimGlobalMailRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error) {
+	out := new(GlobalMailStateResponse)
+	err := c.cc.Invoke(ctx, MailService_ClaimGlobalMail_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mailServiceClient) DeleteGlobalMail(ctx context.Context, in *GlobalMailStateRequest, opts ...grpc.CallOption) (*GlobalMailStateResponse, error) {
+	out := new(GlobalMailStateResponse)
+	err := c.cc.Invoke(ctx, MailService_DeleteGlobalMail_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MailServiceServer is the server API for MailService service.
 // All implementations must embed UnimplementedMailServiceServer
 // for forward compatibility
 type MailServiceServer interface {
 	ListGlobalMails(context.Context, *ListGlobalMailsRequest) (*ListGlobalMailsResponse, error)
+	MarkGlobalMailRead(context.Context, *GlobalMailStateRequest) (*GlobalMailStateResponse, error)
+	ClaimGlobalMail(context.Context, *ClaimGlobalMailRequest) (*GlobalMailStateResponse, error)
+	DeleteGlobalMail(context.Context, *GlobalMailStateRequest) (*GlobalMailStateResponse, error)
 	mustEmbedUnimplementedMailServiceServer()
 }
 
@@ -60,6 +96,15 @@ type UnimplementedMailServiceServer struct {
 
 func (UnimplementedMailServiceServer) ListGlobalMails(context.Context, *ListGlobalMailsRequest) (*ListGlobalMailsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListGlobalMails not implemented")
+}
+func (UnimplementedMailServiceServer) MarkGlobalMailRead(context.Context, *GlobalMailStateRequest) (*GlobalMailStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkGlobalMailRead not implemented")
+}
+func (UnimplementedMailServiceServer) ClaimGlobalMail(context.Context, *ClaimGlobalMailRequest) (*GlobalMailStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimGlobalMail not implemented")
+}
+func (UnimplementedMailServiceServer) DeleteGlobalMail(context.Context, *GlobalMailStateRequest) (*GlobalMailStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteGlobalMail not implemented")
 }
 func (UnimplementedMailServiceServer) mustEmbedUnimplementedMailServiceServer() {}
 
@@ -92,6 +137,60 @@ func _MailService_ListGlobalMails_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MailService_MarkGlobalMailRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GlobalMailStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MailServiceServer).MarkGlobalMailRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MailService_MarkGlobalMailRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MailServiceServer).MarkGlobalMailRead(ctx, req.(*GlobalMailStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MailService_ClaimGlobalMail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimGlobalMailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MailServiceServer).ClaimGlobalMail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MailService_ClaimGlobalMail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MailServiceServer).ClaimGlobalMail(ctx, req.(*ClaimGlobalMailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MailService_DeleteGlobalMail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GlobalMailStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MailServiceServer).DeleteGlobalMail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MailService_DeleteGlobalMail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MailServiceServer).DeleteGlobalMail(ctx, req.(*GlobalMailStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MailService_ServiceDesc is the grpc.ServiceDesc for MailService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -102,6 +201,18 @@ var MailService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListGlobalMails",
 			Handler:    _MailService_ListGlobalMails_Handler,
+		},
+		{
+			MethodName: "MarkGlobalMailRead",
+			Handler:    _MailService_MarkGlobalMailRead_Handler,
+		},
+		{
+			MethodName: "ClaimGlobalMail",
+			Handler:    _MailService_ClaimGlobalMail_Handler,
+		},
+		{
+			MethodName: "DeleteGlobalMail",
+			Handler:    _MailService_DeleteGlobalMail_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

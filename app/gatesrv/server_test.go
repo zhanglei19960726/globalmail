@@ -2,46 +2,49 @@ package gatesrv
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"globalmail/api/rpc"
 )
 
 type fakeUIDRouter struct {
-	route GameServerInstance
+	route   GameServerInstance
+	cleared int64
 }
 
 func (r fakeUIDRouter) Resolve(context.Context, int64) (GameServerInstance, error) {
 	return r.route, nil
 }
 
-func TestServerRouteReturnsGameServer(t *testing.T) {
-	server := NewServer(fakeUIDRouter{route: GameServerInstance{
+func (r *fakeUIDRouter) Clear(_ context.Context, uid int64) error {
+	r.cleared = uid
+	return nil
+}
+
+func TestServerResolveRouteReturnsGameServer(t *testing.T) {
+	server := NewServer(&fakeUIDRouter{route: GameServerInstance{
 		InstanceID: "game-1",
 		GrpcAddr:   "127.0.0.1:9001",
 	}})
-	req := httptest.NewRequest(http.MethodGet, "/route?uid=10001", nil)
-	rec := httptest.NewRecorder()
 
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	resp, err := server.ResolveRoute(context.Background(), &rpc.RouteRequest{Uid: 10001})
+	if err != nil {
+		t.Fatalf("resolve route failed: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "game-1") {
-		t.Fatalf("expected route response, got %s", rec.Body.String())
+	if resp.GetInstanceId() != "game-1" {
+		t.Fatalf("expected game-1, got %s", resp.GetInstanceId())
 	}
 }
 
-func TestServerRouteRejectsInvalidUID(t *testing.T) {
-	server := NewServer(fakeUIDRouter{})
-	req := httptest.NewRequest(http.MethodGet, "/route?uid=bad", nil)
-	rec := httptest.NewRecorder()
+func TestServerClearRouteDelegatesToRouter(t *testing.T) {
+	router := &fakeUIDRouter{}
+	server := NewServer(router)
 
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d", rec.Code)
+	resp, err := server.ClearRoute(context.Background(), &rpc.RouteRequest{Uid: 10001})
+	if err != nil {
+		t.Fatalf("clear route failed: %v", err)
+	}
+	if !resp.GetOk() || router.cleared != 10001 {
+		t.Fatalf("expected clear ok for uid 10001, got ok=%v uid=%d", resp.GetOk(), router.cleared)
 	}
 }

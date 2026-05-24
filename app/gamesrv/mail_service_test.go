@@ -31,7 +31,11 @@ func (f *fakeMailRepository) GetUserStates(_ context.Context, _ int64, mailIDs [
 	return out, nil
 }
 
-func (f *fakeMailRepository) SaveUserState(context.Context, globalmail.UserGlobalMailState) error {
+func (f *fakeMailRepository) SaveUserState(_ context.Context, state globalmail.UserGlobalMailState) error {
+	if f.states == nil {
+		f.states = map[int64]globalmail.UserGlobalMailState{}
+	}
+	f.states[state.GlobalMailID] = state
 	return nil
 }
 
@@ -149,5 +153,77 @@ func TestMailServiceListGlobalMailsSkipsDeletedState(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("expected deleted mail filtered, got %d", len(items))
+	}
+}
+
+func TestMailServiceClaimGlobalMailIsIdempotent(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeMailRepository{
+		mails: []globalmail.GlobalMail{
+			{
+				ID:         1,
+				Status:     globalmail.MailStatusPublished,
+				StartTime:  now.Add(-time.Hour),
+				ExpireTime: now.Add(time.Hour),
+			},
+		},
+		states: map[int64]globalmail.UserGlobalMailState{
+			1: {
+				RoleID:             10001,
+				ServerID:           1,
+				GlobalMailID:       1,
+				Status:             globalmail.UserMailStatusClaimed,
+				ClaimedLootIndexes: []int{0},
+				Version:            1,
+			},
+		},
+	}
+	cacheRepo := &fakeCacheRepository{version: 1}
+	localCache := globalmail.NewLocalCache(repo, cacheRepo)
+	localCache.ForceRefresh(context.Background())
+	service := NewMailService(repo, localCache)
+
+	state, err := service.ClaimGlobalMail(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1, []int{0, 2})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if state.Status != globalmail.UserMailStatusClaimed {
+		t.Fatalf("unexpected status: %s", state.Status)
+	}
+	if len(state.ClaimedLootIndexes) != 2 || state.ClaimedLootIndexes[0] != 0 || state.ClaimedLootIndexes[1] != 2 {
+		t.Fatalf("unexpected claimed loot indexes: %+v", state.ClaimedLootIndexes)
+	}
+}
+
+func TestMailServiceDeleteGlobalMailWritesDeletedState(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeMailRepository{
+		mails: []globalmail.GlobalMail{
+			{
+				ID:         1,
+				Status:     globalmail.MailStatusPublished,
+				StartTime:  now.Add(-time.Hour),
+				ExpireTime: now.Add(time.Hour),
+			},
+		},
+		states: map[int64]globalmail.UserGlobalMailState{},
+	}
+	cacheRepo := &fakeCacheRepository{version: 1}
+	localCache := globalmail.NewLocalCache(repo, cacheRepo)
+	localCache.ForceRefresh(context.Background())
+	service := NewMailService(repo, localCache)
+
+	state, err := service.DeleteGlobalMail(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.Status != globalmail.UserMailStatusDeleted || state.DeleteTime == nil {
+		t.Fatalf("expected deleted state with delete time, got %+v", state)
 	}
 }

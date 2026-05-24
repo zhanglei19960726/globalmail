@@ -106,10 +106,10 @@ session route
 
 ```text
 cmd/gatesrv/main.go:
-    组装 Redis route store、etcd gamesrv provider、RouteService，并注册 gatesrv 实例。
+    组装 Redis route store、etcd gamesrv provider、RouteService，注册 gatesrv 实例，并启动 gRPC GateService。
 
 app/gatesrv/server.go:
-    暴露 /healthz 和 /route?uid= 路由查询骨架，后续 WebSocket 协议层复用 RouteService。
+    实现 GateService.ResolveRoute 和 GateService.ClearRoute，后续 WebSocket 协议层复用 RouteService。
 
 app/gatesrv/session.go:
     维护 UID -> gamesrv 的本机 session route cache。
@@ -124,7 +124,60 @@ data/redis/routing.go:
     实现 DBLoginToken、DBGateConn、DBSrvRouter 的 Redis 读写、TTL 和删除。
 ```
 
-## 5. gamesrv 全局邮件刷新流程
+## 5. 客户端命令转发流程
+
+客户端业务包进入 `gatesrv` 后，`gatesrv` 不直接处理业务命令，只做命令解析、身份覆盖、路由和转发。
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant G as gatesrv
+    participant R as RouteService
+    participant GS as gamesrv
+    participant CR as CommandRegistry
+    participant H as Handler
+
+    C->>G: CommandRequest(CommandID, seq, payload)
+    G->>G: 使用 session 覆盖 UID/RoleID/ServerID
+    G->>R: Resolve(UID)
+    R-->>G: gamesrv grpc_addr
+    G->>GS: GameCommandService.Dispatch(CommandRequest)
+    GS->>CR: handlers[CommandID]
+    CR->>H: handler(ctx, request)
+    H-->>CR: protobuf Any response
+    CR-->>GS: CommandResponse
+    GS-->>G: CommandResponse
+    G-->>C: 回包
+```
+
+职责边界：
+
+```text
+gatesrv:
+    解析 CommandID
+    覆盖可信身份
+    RouteService.Resolve(uid)
+    转发到目标 gamesrv Dispatch
+    转发失败时 Clear(uid)
+
+gamesrv:
+    CommandRegistry 注册 CommandID -> handler
+    Dispatch 根据 CommandID 查找 handler
+    handler 解析 protobuf Any 载荷
+    调用具体业务服务
+```
+
+失败处理：
+
+```text
+1. gatesrv 调用目标 gamesrv 失败。
+2. gatesrv 调用 RouteService.Clear(uid)。
+3. 清理本机 session route。
+4. 删除 Redis DBSrvRouter:{UID}。
+5. 后续请求重新 Resolve(uid)，选择健康 gamesrv。
+```
+
+## 6. gamesrv 全局邮件刷新流程
 
 Kafka 消费链路：
 
@@ -150,7 +203,49 @@ Kafka rh.global-mail-events
     -> 返回 protobuf GlobalMailItem 列表
 ```
 
-## 6. accsrv 登录 Token 流程
+邮件状态写入链路：
+
+```text
+MailService.MarkGlobalMailRead
+MailService.ClaimGlobalMail
+MailService.DeleteGlobalMail
+    -> api/rpc/mail.proto
+    -> app/gamesrv.MailRPCServer
+    -> MailService 重新校验可见性
+    -> MailRepository.GetUserStates
+    -> MailRepository.SaveUserState
+    -> MySQL UserGlobalMailState
+```
+
+领取接口当前完成状态幂等合并，奖励实际发放后续接入独立奖励服务或背包服务时再放到 `ClaimGlobalMail` 的强校验流程内。
+
+命令字分发链路：
+
+```text
+客户端业务包
+    -> gatesrv 解析出 api/rpc/command.proto 中的 CommandID
+    -> app/gatesrv.CommandForwarder
+    -> RouteService.Resolve(uid) 找到目标 gamesrv
+    -> 调用目标 gamesrv 的 GameCommandService.Dispatch
+    -> GameCommandService.Dispatch
+    -> app/gamesrv.CommandRegistry
+    -> 按 CommandID 查找已注册 handler
+    -> app/gamesrv.mail_commands.go
+    -> MailRPCServer 对应接口
+```
+
+如果 `gatesrv` 转发到目标 `gamesrv` 失败，会调用 `RouteService.Clear(uid)` 清理本机 session route 和 Redis `DBSrvRouter:{UID}`，后续请求重新按 UID 选服。
+
+当前已注册命令：
+
+```text
+COMMAND_ID_MAIL_LIST_GLOBAL = 1001
+COMMAND_ID_MAIL_MARK_READ   = 1002
+COMMAND_ID_MAIL_CLAIM       = 1003
+COMMAND_ID_MAIL_DELETE      = 1004
+```
+
+## 7. accsrv 登录 Token 流程
 
 当前代码骨架：
 
@@ -201,7 +296,7 @@ DBSrvRouter:
 - 新玩家或重建路由的玩家可以分配到新 `gamesrv`。
 - 原 `gamesrv` 下线或发送失败时，gate 清理内存 route 和 `DBSrvRouter` 后重新 `RouteNode`。
 
-## 5. gatesrv 容灾流程
+## 8. gatesrv 容灾流程
 
 ```mermaid
 flowchart TD
@@ -233,7 +328,7 @@ gate 容灾依赖：
 7. 旧 DBGateConn 不需要强制同步清理，依赖 TTL 收敛。
 ```
 
-## 6. gamesrv 容灾流程
+## 9. gamesrv 容灾流程
 
 ```mermaid
 flowchart TD
@@ -264,7 +359,7 @@ game 容灾依赖：
 7. recovery-controller 可按失败计数批量标记旧路由失效，并触发告警。
 ```
 
-## 7. recovery-controller 自动化流程
+## 10. recovery-controller 自动化流程
 
 `recovery-controller` 是旁路控制器，不处理玩家请求，只监听状态并执行自动化治理动作。
 
