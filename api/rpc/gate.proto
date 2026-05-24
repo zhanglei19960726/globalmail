@@ -7,6 +7,7 @@ option go_package = "globalmail/api/rpc;rpc";
 service GateService {
   rpc ResolveRoute(RouteRequest) returns (RouteResponse);
   rpc ClearRoute(RouteRequest) returns (ClearRouteResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
 
 message RouteRequest {
@@ -22,4 +23,18 @@ message RouteResponse {
 
 message ClearRouteResponse {
   bool ok = 1;
+}
+
+message HeartbeatRequest {
+  int64 uid = 1;
+  string conn_id = 2;
+  int64 seq = 3;
+  int64 client_timestamp = 4;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+  int64 seq = 2;
+  int64 server_timestamp = 3;
+  string expire_at = 4;
 }

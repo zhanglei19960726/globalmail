@@ -3,6 +3,7 @@ package gatesrv
 import (
 	"context"
 	"testing"
+	"time"
 
 	"globalmail/api/rpc"
 )
@@ -46,5 +47,37 @@ func TestServerClearRouteDelegatesToRouter(t *testing.T) {
 	}
 	if !resp.GetOk() || router.cleared != 10001 {
 		t.Fatalf("expected clear ok for uid 10001, got ok=%v uid=%d", resp.GetOk(), router.cleared)
+	}
+}
+
+func TestServerHeartbeatRefreshesConnection(t *testing.T) {
+	store := &fakeGateConnStore{}
+	manager := NewConnectionManager(store, "gate-1", time.Minute, 30*time.Second)
+	if _, err := manager.Bind(context.Background(), BindSessionRequest{
+		UID:    10001,
+		ConnID: "conn-1",
+	}); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	server := NewServerWithConnections(&fakeUIDRouter{}, manager)
+
+	resp, err := server.Heartbeat(context.Background(), &rpc.HeartbeatRequest{
+		Uid:    10001,
+		ConnId: "conn-1",
+		Seq:    9,
+	})
+	if err != nil {
+		t.Fatalf("heartbeat failed: %v", err)
+	}
+	if !resp.GetOk() || resp.GetSeq() != 9 || resp.GetExpireAt() == "" {
+		t.Fatalf("unexpected heartbeat response: %+v", resp)
+	}
+}
+
+func TestServerHeartbeatRequiresConnectionManager(t *testing.T) {
+	server := NewServer(&fakeUIDRouter{})
+	_, err := server.Heartbeat(context.Background(), &rpc.HeartbeatRequest{Uid: 10001})
+	if err != ErrConnectionManagerRequired {
+		t.Fatalf("expected ErrConnectionManagerRequired, got %v", err)
 	}
 }

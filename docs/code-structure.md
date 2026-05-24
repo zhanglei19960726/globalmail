@@ -95,6 +95,7 @@ login.proto:
 gate.proto:
     GateService/ResolveRoute
     GateService/ClearRoute
+    GateService/Heartbeat
 
 command.proto:
     CommandID
@@ -195,6 +196,8 @@ app/accsrv:
 
 app/gatesrv:
     实现 GateService 路由查询和清理。
+    ConnectionManager 管理 ConnectionPool、Heartbeat、DBGateConn 续期和过期连接关闭。
+    ConnectionPool 按 UID 和 ConnID 建索引，替换、删除、过期扫描时负责关闭真实连接。
     CommandForwarder 解析 CommandRequest，按 UID Resolve 到 gamesrv，再调用 GameCommandService.Dispatch。
 
 app/gamesrv:
@@ -248,6 +251,12 @@ etcd:
     etcd.lease_ttl
     etcd.keepalive_interval
     etcd.service_key_prefix
+
+Gate:
+    gate.route_ttl
+    gate.virtual_nodes
+    gate.session_ttl
+    gate.gate_conn_renew_interval
 ```
 
 使用原则：
@@ -291,6 +300,7 @@ app/
 │
 ├── gatesrv/
 │   ├── server.go                  # gRPC GateService 路由查询/清理适配层，已实现
+│   ├── connection.go              # ConnectionPool、心跳、DBGateConn 续期和过期连接关闭，已实现
 │   ├── command_forwarder.go       # 解析 CommandRequest 后转发到目标 gamesrv Dispatch，已实现
 │   ├── session.go                 # SessPool 路由缓存，已实现
 │   ├── router.go                  # UID 到 gamesrv 的一致性哈希路由，已实现

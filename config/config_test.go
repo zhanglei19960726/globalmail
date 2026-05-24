@@ -21,6 +21,9 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Gate.RouteTTL.Duration != 5*time.Minute {
 		t.Fatalf("unexpected gate route ttl: %s", cfg.Gate.RouteTTL.Duration)
 	}
+	if cfg.Gate.SessionTTL.Duration != 90*time.Second {
+		t.Fatalf("unexpected gate session ttl: %s", cfg.Gate.SessionTTL.Duration)
+	}
 	if cfg.Acc.LoginTokenTTL.Duration != 2*time.Minute {
 		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)
 	}
@@ -54,6 +57,8 @@ etcd:
 gate:
   route_ttl: 10m
   virtual_nodes: 200
+  session_ttl: 120s
+  gate_conn_renew_interval: 40s
 acc:
   login_token_ttl: 3m
   game_service_addr: "gamesrv:9001"
@@ -90,6 +95,12 @@ acc:
 	}
 	if cfg.Gate.VirtualNodes != 200 {
 		t.Fatalf("unexpected gate virtual nodes: %d", cfg.Gate.VirtualNodes)
+	}
+	if cfg.Gate.SessionTTL.Duration != 120*time.Second {
+		t.Fatalf("unexpected gate session ttl: %s", cfg.Gate.SessionTTL.Duration)
+	}
+	if cfg.Gate.GateConnRenewInterval.Duration != 40*time.Second {
+		t.Fatalf("unexpected gate conn renew interval: %s", cfg.Gate.GateConnRenewInterval.Duration)
 	}
 	if cfg.Acc.LoginTokenTTL.Duration != 3*time.Minute {
 		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)

@@ -48,7 +48,9 @@ DBGateConn:{UID}
 - ClientIP
 - ConnID
 - ConnTime
+- LastActiveTime
 - DeviceID
+- ExpireAt
 ```
 
 `DBGateConn` 的写入时机：
@@ -57,15 +59,62 @@ DBGateConn:{UID}
 - 同一 UID 重连到新 `gatesrv` 时覆盖旧记录。
 - 连接保持期间按心跳或续期任务刷新 TTL。
 
-单台 `gatesrv` 的内存 `SessPool` 只负责快速找到本机连接：
+单台 `gatesrv` 的内存连接池负责快速找到和管理本机连接：
 
 ```text
-SessPool:
+ConnectionPool:
     key   : UID
-    value : Client session / ConnID / route cache
+    index : ConnID -> UID
+    value : ClientConnection / Session / LastHeartbeatAt / ExpireAt / route cache
 ```
 
 如果其他服务需要给玩家推送消息，先查 `DBGateConn` 获取玩家当前 gate 地址，再由目标 gate 从本机 `SessPool` 找连接下发。
+
+连接可用性由三层保证：
+
+```text
+客户端:
+    定时发送 HeartbeatRequest。
+    超时未收到 HeartbeatResponse 时主动重连 LB。
+
+gatesrv:
+    ConnectionPool 保存真实连接对象和 UID、RoleID、ServerID、ConnID、LastHeartbeatAt、ExpireAt。
+    每次心跳刷新本机 LastHeartbeatAt 和 ExpireAt。
+    后台扫描过期 session，关闭真实连接并清理本机状态。
+
+Redis:
+    DBGateConn:{UID} 记录玩家当前 gate 位置。
+    连接建立时写入。
+    心跳不每次写 Redis，而是按 gate_conn_renew_interval 节流续期。
+    Redis TTL 兜底清理异常断开的连接位置。
+```
+
+心跳流程：
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant G as gatesrv
+    participant S as ConnectionPool
+    participant R as Redis
+
+    C->>G: GateService.Heartbeat(uid, conn_id, seq)
+    G->>S: 校验 UID + ConnID
+    S-->>G: session
+    G->>S: 更新 LastHeartbeatAt 和 ExpireAt
+    alt 达到续期间隔
+        G->>R: Set DBGateConn:{UID} with TTL
+    end
+    G-->>C: HeartbeatResponse(seq, expire_at)
+```
+
+推荐默认值：
+
+```text
+heartbeat_interval: 10s
+session_ttl: 90s
+gate_conn_renew_interval: 30s
+```
 
 ## 4. gatesrv 到 gamesrv 的路由
 

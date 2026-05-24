@@ -82,8 +82,10 @@ type EtcdConfig struct {
 }
 
 type GateConfig struct {
-	RouteTTL     Duration `yaml:"route_ttl"`
-	VirtualNodes int      `yaml:"virtual_nodes"`
+	RouteTTL              Duration `yaml:"route_ttl"`
+	VirtualNodes          int      `yaml:"virtual_nodes"`
+	SessionTTL            Duration `yaml:"session_ttl"`
+	GateConnRenewInterval Duration `yaml:"gate_conn_renew_interval"`
 }
 
 type AccConfig struct {
@@ -124,8 +126,10 @@ func Default() Config {
 			ServiceKeyPrefix:  "/rh/services",
 		},
 		Gate: GateConfig{
-			RouteTTL:     Duration{Duration: 5 * time.Minute},
-			VirtualNodes: 100,
+			RouteTTL:              Duration{Duration: 5 * time.Minute},
+			VirtualNodes:          100,
+			SessionTTL:            Duration{Duration: 90 * time.Second},
+			GateConnRenewInterval: Duration{Duration: 30 * time.Second},
 		},
 		Acc: AccConfig{
 			LoginTokenTTL:   Duration{Duration: 2 * time.Minute},
@@ -180,6 +184,12 @@ func (c Config) Validate() error {
 	}
 	if c.Gate.VirtualNodes <= 0 {
 		return errors.New("gate virtual nodes must be positive")
+	}
+	if c.Gate.SessionTTL.Duration <= 0 {
+		return errors.New("gate session ttl must be positive")
+	}
+	if c.Gate.GateConnRenewInterval.Duration <= 0 {
+		return errors.New("gate conn renew interval must be positive")
 	}
 	if c.Acc.LoginTokenTTL.Duration <= 0 {
 		return errors.New("acc login token ttl must be positive")

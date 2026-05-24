@@ -56,8 +56,10 @@ func main() {
 
 	provider := gatesrv.NewEtcdGameServerProvider(registry)
 	routeService := gatesrv.NewRouteService(routeStore, provider, cfg.Gate.RouteTTL.Duration, cfg.Gate.VirtualNodes)
+	connections := gatesrv.NewConnectionManager(routeStore, cfg.Service.PublicAddr, cfg.Gate.SessionTTL.Duration, cfg.Gate.GateConnRenewInterval.Duration)
+	defer connections.CloseAll()
 	server := grpc.NewServer()
-	rpc.RegisterGateServiceServer(server, gatesrv.NewServer(routeService))
+	rpc.RegisterGateServiceServer(server, gatesrv.NewServerWithConnections(routeService, connections))
 	listener, err := net.Listen("tcp", cfg.Service.ListenAddr)
 	if err != nil {
 		log.Fatalf("listen gatesrv: %v", err)

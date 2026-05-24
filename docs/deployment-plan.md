@@ -160,12 +160,24 @@ ListReady(serviceName)
 - 新连接由 LB 分配到健康 `gatesrv`。
 - 连接建立后不做连接迁移，故障时依赖客户端重连。
 - LB 必须支持长连接超时配置，避免过早断开。
+- 进程内使用 `ConnectionPool` 管理真实连接和 session 元数据，支持按 UID、ConnID 查询。
+- 心跳只刷新本机连接池状态，Redis `DBGateConn` 按 `gate.gate_conn_renew_interval` 节流续期。
+- 实例 drain 时 readiness 先置为 false，停止接收新连接，再等待已有连接自然下线或主动 `CloseAll`。
 
 入口层要求：
 
 - 只向 readiness 通过的实例转发新流量。
 - 支持实例摘除后的连接 drain。
 - 记录客户端 IP 或通过 header 透传，便于写入 `DBGateConn`。
+
+推荐连接参数：
+
+```text
+gate.session_ttl: 90s
+gate.gate_conn_renew_interval: 30s
+client.heartbeat_interval: 10s
+lb.idle_timeout: 大于 session_ttl，建议 120s 以上
+```
 
 ## 6. Kafka 事件总线
 

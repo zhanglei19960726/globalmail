@@ -11,13 +11,14 @@ type LoginToken struct {
 }
 
 type GateConn struct {
-	UID         int64     `json:"uid"`
-	GatewayAddr string    `json:"gateway_addr"`
-	ClientIP    string    `json:"client_ip"`
-	ConnID      string    `json:"conn_id"`
-	ConnTime    time.Time `json:"conn_time"`
-	DeviceID    string    `json:"device_id"`
-	ExpireAt    time.Time `json:"expire_at"`
+	UID            int64     `json:"uid"`
+	GatewayAddr    string    `json:"gateway_addr"`
+	ClientIP       string    `json:"client_ip"`
+	ConnID         string    `json:"conn_id"`
+	ConnTime       time.Time `json:"conn_time"`
+	LastActiveTime time.Time `json:"last_active_time"`
+	DeviceID       string    `json:"device_id"`
+	ExpireAt       time.Time `json:"expire_at"`
 }
 
 type SrvRouter struct {

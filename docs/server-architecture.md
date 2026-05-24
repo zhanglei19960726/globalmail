@@ -196,8 +196,8 @@ mgrsrv   : 管理后台或内部管理请求入口
 
 - 维护 WebSocket 长连接和心跳。
 - 用 `SessionKey` 查询 `DBLoginToken`，恢复 `UID`、`RoleID`、`ServerID`。
-- 维护本机 `SessPool`。
-- 写入和续期 `DBGateConn`。
+- 维护本机 `ConnectionPool`，按 UID 和 ConnID 管理真实连接、session 元数据和过期时间。
+- 写入和节流续期 `DBGateConn`，使用 Redis TTL 兜底清理异常连接位置。
 - 根据 UID 路由到 `gamesrv`。
 - 覆盖客户端包头中的 UID，防止伪造身份。
 

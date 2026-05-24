@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	GateService_ResolveRoute_FullMethodName = "/globalmail.rpc.GateService/ResolveRoute"
 	GateService_ClearRoute_FullMethodName   = "/globalmail.rpc.GateService/ClearRoute"
+	GateService_Heartbeat_FullMethodName    = "/globalmail.rpc.GateService/Heartbeat"
 )
 
 // GateServiceClient is the client API for GateService service.
@@ -29,6 +30,7 @@ const (
 type GateServiceClient interface {
 	ResolveRoute(ctx context.Context, in *RouteRequest, opts ...grpc.CallOption) (*RouteResponse, error)
 	ClearRoute(ctx context.Context, in *RouteRequest, opts ...grpc.CallOption) (*ClearRouteResponse, error)
+	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
 
 type gateServiceClient struct {
@@ -57,12 +59,22 @@ func (c *gateServiceClient) ClearRoute(ctx context.Context, in *RouteRequest, op
 	return out, nil
 }
 
+func (c *gateServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+	out := new(HeartbeatResponse)
+	err := c.cc.Invoke(ctx, GateService_Heartbeat_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GateServiceServer is the server API for GateService service.
 // All implementations must embed UnimplementedGateServiceServer
 // for forward compatibility
 type GateServiceServer interface {
 	ResolveRoute(context.Context, *RouteRequest) (*RouteResponse, error)
 	ClearRoute(context.Context, *RouteRequest) (*ClearRouteResponse, error)
+	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedGateServiceServer()
 }
 
@@ -75,6 +87,9 @@ func (UnimplementedGateServiceServer) ResolveRoute(context.Context, *RouteReques
 }
 func (UnimplementedGateServiceServer) ClearRoute(context.Context, *RouteRequest) (*ClearRouteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClearRoute not implemented")
+}
+func (UnimplementedGateServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
 }
 func (UnimplementedGateServiceServer) mustEmbedUnimplementedGateServiceServer() {}
 
@@ -125,6 +140,24 @@ func _GateService_ClearRoute_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GateService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GateServiceServer).Heartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GateService_Heartbeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GateServiceServer).Heartbeat(ctx, req.(*HeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GateService_ServiceDesc is the grpc.ServiceDesc for GateService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -139,6 +172,10 @@ var GateService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearRoute",
 			Handler:    _GateService_ClearRoute_Handler,
+		},
+		{
+			MethodName: "Heartbeat",
+			Handler:    _GateService_Heartbeat_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

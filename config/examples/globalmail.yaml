@@ -42,6 +42,8 @@ etcd:
 gate:
   route_ttl: 5m
   virtual_nodes: 100
+  session_ttl: 90s
+  gate_conn_renew_interval: 30s
 
 acc:
   login_token_ttl: 2m
