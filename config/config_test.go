@@ -30,6 +30,12 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Acc.GameServiceAddr == "" {
 		t.Fatal("expected default game service addr")
 	}
+	if cfg.Game.RequestQueueWorkers != 4 || cfg.Game.RequestQueueCapacity != 1024 {
+		t.Fatalf("unexpected game request queue config: %+v", cfg.Game)
+	}
+	if cfg.Game.RequestTimeout.Duration != 3*time.Second {
+		t.Fatalf("unexpected game request timeout: %s", cfg.Game.RequestTimeout.Duration)
+	}
 }
 
 func TestLoadBytesOverridesDefaults(t *testing.T) {
@@ -62,6 +68,10 @@ gate:
 acc:
   login_token_ttl: 3m
   game_service_addr: "gamesrv:9001"
+game:
+  request_queue_workers: 8
+  request_queue_capacity: 2048
+  request_timeout: 5s
 `))
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
@@ -107,6 +117,15 @@ acc:
 	}
 	if cfg.Acc.GameServiceAddr != "gamesrv:9001" {
 		t.Fatalf("unexpected game service addr: %s", cfg.Acc.GameServiceAddr)
+	}
+	if cfg.Game.RequestQueueWorkers != 8 {
+		t.Fatalf("unexpected request queue workers: %d", cfg.Game.RequestQueueWorkers)
+	}
+	if cfg.Game.RequestQueueCapacity != 2048 {
+		t.Fatalf("unexpected request queue capacity: %d", cfg.Game.RequestQueueCapacity)
+	}
+	if cfg.Game.RequestTimeout.Duration != 5*time.Second {
+		t.Fatalf("unexpected request timeout: %s", cfg.Game.RequestTimeout.Duration)
 	}
 }
 

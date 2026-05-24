@@ -4,7 +4,8 @@ import (
 	"context"
 	"flag"
 	"log"
-	"net"
+	"net/http"
+	"time"
 
 	"globalmail/api/rpc"
 	"globalmail/app/accsrv"
@@ -38,21 +39,22 @@ func main() {
 
 	repo := redisdata.NewRepository(redisClient, cfg.Redis.KeyPrefix)
 	service := accsrv.NewService(repo, rpc.NewGameServiceClient(gameConn), cfg.Acc.LoginTokenTTL.Duration)
-	server := grpc.NewServer()
-	rpc.RegisterAccServiceServer(server, accsrv.NewServer(service))
-
-	listener, err := net.Listen("tcp", cfg.Service.ListenAddr)
-	if err != nil {
-		log.Fatalf("listen accsrv: %v", err)
+	server := &http.Server{
+		Addr:    cfg.Service.ListenAddr,
+		Handler: accsrv.NewServer(service).Handler(),
 	}
 
 	go func() {
 		<-ctx.Done()
-		server.GracefulStop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown accsrv: %v", err)
+		}
 	}()
 
 	log.Printf("accsrv %s listening on %s", cfg.Service.InstanceID, cfg.Service.ListenAddr)
-	if err := server.Serve(listener); err != nil {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve accsrv: %v", err)
 	}
 }

@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart TD
-    client[客户端] -->|"gRPC登录请求"| lb[LB入口层]
+    client[客户端] -->|"HTTP登录请求_Protobuf消息"| lb[LB入口层]
     client -->|"WebSocket长连接"| lb
 
     subgraph accessLayer [接入层]
@@ -20,6 +20,7 @@ flowchart TD
     end
 
     subgraph logicLayer [业务层]
+        reqQueue[gamesrv请求队列]
         game[gamesrv业务逻辑]
     end
 
@@ -54,7 +55,8 @@ flowchart TD
     gate --> gateMem
 
     gate -->|"RouteNode按UID选服"| etcd
-    gate -->|"转发玩家业务包"| game
+    gate -->|"转发玩家业务包"| reqQueue
+    reqQueue --> game
     game --> gameMem
 
     game --> mysql
@@ -71,9 +73,9 @@ flowchart TD
 
 这张图表达四个核心关系：
 
-- 登录链路：客户端经 LB 通过 gRPC 调用 `accsrv`，`accsrv` 转发到 `gamesrv` 处理用户注册/用户资料，随后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
+- 登录链路：客户端经 LB 通过 HTTP 调用 `accsrv` 登录接口，请求和回包使用 `login.proto` 中的 protobuf message；`accsrv` 再通过 gRPC 转发到 `gamesrv` 处理用户注册/用户资料，随后写 `DBLoginToken` 到 Redis，并返回 `SessionKey`。
 - 连接和路由链路：客户端经 LB 建立到 `gatesrv` 的 WebSocket，`gatesrv` 通过 Redis 恢复 UID，再通过 etcd 中的健康 `gamesrv` 列表做一致性哈希 `RouteNode`。
-- 命令分发链路：`gatesrv` 从客户端业务包解析出 protobuf `CommandID`，按 UID 选择目标 `gamesrv`，再调用目标 `gamesrv` 的 `GameCommandService.Dispatch`；`gamesrv` 内部通过命令注册表找到真正的业务 handler。
+- 命令分发链路：`gatesrv` 从客户端业务包解析出 protobuf `CommandID`，按 UID 选择目标 `gamesrv`，再调用目标 `gamesrv` 的 `GameCommandService.Dispatch`；`gamesrv` 先把请求放入本机有界请求队列，再由 worker 调用命令注册表找到真正的业务 handler。
 - 存储链路：运行态热点数据放本地内存和 Redis，账号、玩家、邮件、领取状态等权威数据落 MySQL。
 - 服务发现链路：各服务启动后注册到 etcd，`gatesrv` 通过 etcd watch 得到健康 `gamesrv` 列表。
 - 事件通知链路：管理入口写业务数据和 outbox，`Outbox Relay` 投递 Kafka，`gamesrv` 消费事件刷新本地缓存。
@@ -86,7 +88,7 @@ flowchart TD
 
 ```text
 api/rpc/login.proto:
-    AccService.Login
+    LoginRequest/LoginResponse
     GameService.Login
 
 api/rpc/gate.proto:
@@ -117,6 +119,18 @@ COMMAND_ID_MAIL_DELETE      -> MailRPCServer.DeleteGlobalMail
 ```
 
 路由失败或目标 `gamesrv` 调用失败时，`gatesrv` 会清理当前 UID 的本机 session route 和 Redis `DBSrvRouter:{UID}`，下一次请求重新根据 etcd ready gamesrv 列表和一致性哈希选择目标节点。
+
+`gamesrv` 的请求队列属于进程内削峰和背压机制，不替代 Kafka。它只保护同步玩家请求链路：
+
+```text
+GameCommandService.Dispatch
+    -> CommandRequestQueue 有界队列
+    -> worker pool
+    -> CommandRegistry.Dispatch
+    -> 业务 handler
+```
+
+队列满时直接返回业务码 `429 command queue full`，让 `gatesrv` 或客户端可以快速失败、降频或重试，避免请求无限堆积。单请求还会受 `game.request_timeout` 约束，超时返回 `504 command request timeout`；业务 handler 必须沿用 `context` 调用 MySQL、Redis 和下游 RPC，避免底层操作在超时后继续长时间占用资源。
 
 ## 4. 为什么拆分服务
 
@@ -149,7 +163,7 @@ COMMAND_ID_MAIL_DELETE      -> MailRPCServer.DeleteGlobalMail
 - `gamesrv` 只负责处理“这个玩家的业务怎么执行”。
 - `mgrsrv` 只负责内部管理操作，不混入玩家连接入口。
 
-服务间和客户端交互协议统一使用 gRPC，service、请求和回包结构通过 protobuf 定义并生成 Go 代码；当前登录链路定义在 `api/rpc/login.proto`，网关路由接口定义在 `api/rpc/gate.proto`，gamesrv 通用命令字和注册表定义在 `api/rpc/command.proto`，全局邮件读取和读/领/删状态接口定义在 `api/rpc/mail.proto`。
+协议统一先用 protobuf 定义请求、回包、命令字和服务契约；服务内部交互使用 gRPC，`accsrv` 对客户端登录入口使用 HTTP 承载 protobuf `LoginRequest/LoginResponse`。当前登录链路定义在 `api/rpc/login.proto`，网关路由接口定义在 `api/rpc/gate.proto`，gamesrv 通用命令字和注册表定义在 `api/rpc/command.proto`，全局邮件读取和读/领/删状态接口定义在 `api/rpc/mail.proto`。
 
 这样可以避免一个服务同时承担鉴权、连接、业务和管理逻辑，降低发布和排障复杂度。
 

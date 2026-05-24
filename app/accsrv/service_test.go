@@ -40,10 +40,11 @@ func TestServiceLoginWritesLoginToken(t *testing.T) {
 	}}, 2*time.Minute)
 	service.now = func() time.Time { return now }
 
-	token, err := service.Login(context.Background(), 10001, 1)
+	result, err := service.Login(context.Background(), 10001, 1)
 	if err != nil {
 		t.Fatalf("login failed: %v", err)
 	}
+	token := result.Token
 	if token.Token == "" {
 		t.Fatal("expected generated token")
 	}

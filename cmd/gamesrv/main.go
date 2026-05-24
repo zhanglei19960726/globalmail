@@ -69,7 +69,13 @@ func main() {
 	if err := gamesrv.RegisterMailCommandHandlers(commandRegistry, mailRPCServer); err != nil {
 		log.Fatalf("register mail commands: %v", err)
 	}
-	rpc.RegisterGameCommandServiceServer(grpcServer, gamesrv.NewCommandRPCServer(commandRegistry))
+	commandQueue := gamesrv.NewCommandRequestQueue(commandRegistry, gamesrv.CommandQueueOptions{
+		Workers:        cfg.Game.RequestQueueWorkers,
+		Capacity:       cfg.Game.RequestQueueCapacity,
+		RequestTimeout: cfg.Game.RequestTimeout.Duration,
+	})
+	defer commandQueue.Close()
+	rpc.RegisterGameCommandServiceServer(grpcServer, gamesrv.NewCommandRPCServerWithDispatcher(commandRegistry, commandQueue))
 
 	etcdClient, err := infraetcd.NewClient(cfg.Etcd)
 	if err != nil {

@@ -48,3 +48,8 @@ gate:
 acc:
   login_token_ttl: 2m
   game_service_addr: "127.0.0.1:9001"
+
+game:
+  request_queue_workers: 4
+  request_queue_capacity: 1024
+  request_timeout: 3s

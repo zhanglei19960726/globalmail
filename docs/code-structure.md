@@ -28,7 +28,7 @@ globalmail/
 │
 ├── api/
 │   └── rpc/
-│       ├── login.proto            # AccService/GameService 登录协议定义
+│       ├── login.proto            # HTTP 登录消息和 GameService 登录协议定义
 │       ├── gate.proto             # GateService 路由查询和清理协议定义
 │       ├── command.proto          # GameCommandService 和 CommandID 命令字定义
 │       ├── mail.proto             # MailService 全局邮件读取协议定义
@@ -83,13 +83,13 @@ globalmail/
 
 ### 3.0 `api/rpc/`
 
-`api/rpc/` 是客户端和服务端、服务和服务之间的协议契约层。所有 gRPC service、请求、回包和命令字都先在 `.proto` 中定义，再通过 `protoc-gen-go` 和 `protoc-gen-go-grpc` 生成 Go 代码。
+`api/rpc/` 是客户端和服务端、服务和服务之间的协议契约层。请求、回包、命令字和 gRPC service 都先在 `.proto` 中定义，再通过 `protoc-gen-go` 和 `protoc-gen-go-grpc` 生成 Go 代码；`accsrv` 对外 HTTP 登录也复用这里生成的 protobuf message。
 
 当前职责：
 
 ```text
 login.proto:
-    AccService/Login
+    LoginRequest/LoginResponse
     GameService/Login
 
 gate.proto:
@@ -191,7 +191,7 @@ Kafka、etcd 不放在 `data/`，因为它们不是业务数据存取层，而�
 
 ```text
 app/accsrv:
-    实现 AccService.Login。
+    实现 HTTP POST /login，使用 protobuf LoginRequest/LoginResponse。
     登录时调用 gamesrv GameService.Login 获取或创建用户，再写 DBLoginToken。
 
 app/gatesrv:
@@ -203,6 +203,7 @@ app/gatesrv:
 app/gamesrv:
     实现 GameService.Login。
     实现 GameCommandService 和 CommandRegistry。
+    CommandRequestQueue 在 Dispatch 入口提供本机有界请求队列、worker pool 和队列满背压。
     注册 CommandID -> handler。
     实现 MailService 和全局邮件命令 handler。
 ```
@@ -257,6 +258,11 @@ Gate:
     gate.virtual_nodes
     gate.session_ttl
     gate.gate_conn_renew_interval
+
+Game:
+    game.request_queue_workers
+    game.request_queue_capacity
+    game.request_timeout
 ```
 
 使用原则：
@@ -294,8 +300,7 @@ app/
 │   └── config.go                  # YAML 配置路径和退出信号公共工具，已实现
 │
 ├── accsrv/
-│   ├── server.go                  # gRPC AccService 组装，已实现 Login
-│   ├── handler.go                 # 登录接口处理
+│   ├── server.go                  # HTTP 登录接口和 protobuf 编解码，已实现 Login
 │   └── service.go                 # 登录业务编排，转发 gamesrv 后写 DBLoginToken
 │
 ├── gatesrv/
@@ -312,6 +317,7 @@ app/
 │   ├── server.go                  # 游戏业务 RPC 服务组装
 │   ├── account_service.go         # GameService.Login，负责用户获取或创建
 │   ├── command_service.go         # GameCommandService 通用命令分发和注册表，已实现
+│   ├── request_queue.go           # Dispatch 请求队列、worker pool 和队列满背压，已实现
 │   ├── mail_commands.go           # 邮件命令字注册和 Any 载荷适配，已实现
 │   ├── mail_handler.go            # 邮件相关协议处理
 │   ├── mail_service.go            # 全局邮件读取、状态合并、读/领/删编排，已实现

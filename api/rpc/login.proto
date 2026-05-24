@@ -4,10 +4,6 @@ package globalmail.rpc;
 
 option go_package = "globalmail/api/rpc;rpc";
 
-service AccService {
-  rpc Login(LoginRequest) returns (LoginResponse);
-}
-
 service GameService {
   rpc Login(LoginRequest) returns (LoginResponse);
 }

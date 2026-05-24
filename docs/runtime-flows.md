@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart TD
-    clientLogin[客户端gRPC请求accsrv.AccService/Login] --> auth[第三方登录校验]
+    clientLogin[客户端HTTP POST /login_Protobuf LoginRequest] --> auth[第三方登录校验]
     auth --> forward[accsrv gRPC调用gamesrv.GameService/Login]
     forward --> account[gamesrv获取或创建账号和玩家]
     account --> identity[返回UID_RoleID_ServerID]
@@ -31,8 +31,8 @@ flowchart TD
 关键点：
 
 - `accsrv` 登录成功后创建 `DBLoginToken`，客户端拿到的是 `SessionKey`。
-- 用户注册、玩家初始化和用户资料归属 `gamesrv`；`accsrv` 通过 gRPC 转发登录请求到 `gamesrv`。
-- 登录协议由 `api/rpc/login.proto` 定义，并生成 `login.pb.go`、`login_grpc.pb.go`。
+- 用户注册、玩家初始化和用户资料归属 `gamesrv`；`accsrv` 对外通过 HTTP 接收登录请求，对内通过 gRPC 转发登录请求到 `gamesrv`。
+- 登录请求和响应由 `api/rpc/login.proto` 的 `LoginRequest/LoginResponse` 定义；HTTP 层可使用 protojson 或 `application/x-protobuf` 二进制 protobuf。
 - 客户端连接 `/gate/ws?token=xxx`。
 - `gatesrv` 用 token 查 Redis 中的 `DBLoginToken`，拿到 `UID`、`RoleID`、`ServerID`。
 - 后续客户端业务包中的 UID 不可信，gate 会用 session 中的 UID 覆盖包头。
@@ -277,6 +277,8 @@ MailService.DeleteGlobalMail
     -> RouteService.Resolve(uid) 找到目标 gamesrv
     -> 调用目标 gamesrv 的 GameCommandService.Dispatch
     -> GameCommandService.Dispatch
+    -> CommandRequestQueue 入队
+    -> worker pool 消费
     -> app/gamesrv.CommandRegistry
     -> 按 CommandID 查找已注册 handler
     -> app/gamesrv.mail_commands.go
@@ -284,6 +286,35 @@ MailService.DeleteGlobalMail
 ```
 
 如果 `gatesrv` 转发到目标 `gamesrv` 失败，会调用 `RouteService.Clear(uid)` 清理本机 session route 和 Redis `DBSrvRouter:{UID}`，后续请求重新按 UID 选服。
+
+`gamesrv` 请求队列规则：
+
+```text
+正常:
+    Dispatch 请求进入有界队列。
+    worker 从队列取请求并调用 CommandRegistry。
+    gRPC 请求等待 worker 返回 CommandResponse。
+
+超时:
+    game.request_timeout 从请求进入队列开始计时。
+    包含排队等待和 handler 执行时间。
+    超时后返回 CommandResponse(code=504, message="command request timeout")。
+    handler 必须使用 context 调用数据库、Redis、下游 RPC，才能真正停止底层工作。
+
+队列满:
+    不再入队，立即返回 CommandResponse(code=429, message="command queue full")。
+
+请求取消:
+    客户端或上游 context 取消时，排队等待会尽快返回 context 错误。
+```
+
+默认参数：
+
+```text
+game.request_queue_workers: 4
+game.request_queue_capacity: 1024
+game.request_timeout: 3s
+```
 
 当前已注册命令：
 
@@ -299,9 +330,9 @@ COMMAND_ID_MAIL_DELETE      = 1004
 当前代码骨架：
 
 ```text
-客户端 gRPC AccService.Login
-    -> api/rpc/login.proto
-    -> app/accsrv.Server
+客户端 HTTP POST /login
+    -> api/rpc/login.proto LoginRequest/LoginResponse
+    -> app/accsrv.Server.Handler
     -> app/accsrv.Service.Login
     -> gRPC GameService.Login
     -> app/gamesrv.AccountService.GetOrCreateUser

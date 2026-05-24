@@ -80,15 +80,23 @@ func (r *CommandRegistry) Definitions() []*rpc.CommandDefinition {
 
 type CommandRPCServer struct {
 	rpc.UnimplementedGameCommandServiceServer
-	registry *CommandRegistry
+	registry   *CommandRegistry
+	dispatcher CommandDispatcher
 }
 
 func NewCommandRPCServer(registry *CommandRegistry) *CommandRPCServer {
-	return &CommandRPCServer{registry: registry}
+	return NewCommandRPCServerWithDispatcher(registry, registry)
+}
+
+func NewCommandRPCServerWithDispatcher(registry *CommandRegistry, dispatcher CommandDispatcher) *CommandRPCServer {
+	if dispatcher == nil {
+		dispatcher = registry
+	}
+	return &CommandRPCServer{registry: registry, dispatcher: dispatcher}
 }
 
 func (s *CommandRPCServer) Dispatch(ctx context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
-	return s.registry.Dispatch(ctx, req)
+	return s.dispatcher.Dispatch(ctx, req)
 }
 
 func (s *CommandRPCServer) ListCommands(context.Context, *rpc.ListCommandsRequest) (*rpc.ListCommandsResponse, error) {

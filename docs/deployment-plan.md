@@ -150,7 +150,7 @@ ListReady(serviceName)
 
 `accsrv`：
 
-- 走 gRPC 负载均衡，客户端通过 `AccService.Login` 登录。
+- 走 HTTP 负载均衡，客户端通过 `POST /login` 登录，请求和回包使用 `login.proto` 的 `LoginRequest/LoginResponse`。
 - 实例无状态，任意健康实例都可以处理登录。
 - 登录时转发 `gamesrv.GameService.Login` 完成用户注册/资料初始化，成功后写 `DBLoginToken`，返回 `SessionKey`。
 
@@ -223,7 +223,24 @@ gamesrv:
 - Kafka 延迟或故障时，Outbox Relay 重试，`gamesrv` 定时检查 `GlobalMailVersion` 兜底。
 - Kafka 适合作为跨服务事件总线，但不能替代 MySQL 权威数据和 Redis 缓存版本。
 
-## 7. 健康检查
+## 7. gamesrv 请求队列
+
+`gamesrv` 的请求队列用于同步玩家请求的本机削峰和背压，不承担跨进程可靠投递：
+
+```text
+gatesrv -> GameCommandService.Dispatch -> CommandRequestQueue -> worker pool -> CommandRegistry
+```
+
+部署建议：
+
+- `game.request_queue_workers` 控制并发处理请求的 worker 数，建议接近实例可用 CPU 核心数或按业务耗时压测后调整。
+- `game.request_queue_capacity` 控制单实例最大排队请求数，必须设置上限，避免内存被请求堆积打满。
+- `game.request_timeout` 控制单请求从进入队列到处理完成的总耗时，超时返回 `CommandResponse(code=504)`。
+- 队列满时返回 `CommandResponse(code=429)`，入口层或客户端需要按业务策略降频、提示繁忙或重试。
+- 业务 handler 必须使用请求 `context` 调用 MySQL、Redis 和下游 RPC，否则超时只能释放外层 worker，不能强制杀死底层 goroutine。
+- 这个队列不替代 Kafka；需要可靠异步投递、跨服务广播、失败重试的场景仍使用 Kafka + Outbox。
+
+## 8. 健康检查
 
 建议拆分为三类检查：
 
@@ -246,7 +263,7 @@ dependency:
 - `mgrsrv`：内部鉴权、etcd/Redis/MySQL/Kafka 管理操作能力。
 - `Outbox Relay`：MySQL outbox 读取能力、Kafka 投递能力、积压数量。
 
-## 8. 扩缩容策略
+## 9. 扩缩容策略
 
 新增 `gatesrv`：
 
@@ -282,7 +299,7 @@ flowchart TD
 - 删除 etcd 实例 key 或停止 lease 续租。
 - gate 发送失败后清路由并重新选择健康节点。
 
-## 9. 故障恢复
+## 10. 故障恢复
 
 `gatesrv` 故障：
 
@@ -332,11 +349,11 @@ Kafka 故障：
 - `gamesrv` 通过定时检查 Redis `GlobalMailVersion` 兜底刷新本地缓存。
 - Kafka 恢复后可能投递旧事件，消费端必须按 version 幂等忽略。
 
-## 10. 自动化容灾方案
+## 11. 自动化容灾方案
 
 自动化容灾分为基础自动化和增强自动化两层。基础自动化由服务自身、etcd、LB、Redis TTL 完成；增强自动化由 `recovery-controller` 统一处理故障摘除、路由清理、广播刷新和告警联动。
 
-### 10.1 基础自动化
+### 11.1 基础自动化
 
 ```text
 实例级:
@@ -358,7 +375,7 @@ Kafka 故障：
     新 gatesrv 覆盖写 DBGateConn
 ```
 
-### 10.2 recovery-controller
+### 11.2 recovery-controller
 
 `recovery-controller` 不在玩家请求主链路上，只做旁路自动化治理。
 
@@ -404,14 +421,14 @@ etcd watch 异常:
     3. 恢复后全量拉取 ready 实例列表
 ```
 
-### 10.3 自动化边界
+### 11.3 自动化边界
 
 - 自动摘除只影响新流量，已经在处理中的请求依赖服务自身超时和幂等处理。
 - `gatesrv` 连接不做迁移，依赖客户端重连恢复。
 - `gamesrv` 自动重路由不能保证请求一定没有执行过，业务层必须支持幂等。
 - Redis/MySQL 故障不自动跳过强一致写入，领取奖励等写路径必须返回失败或降级提示。
 
-## 11. 配置项
+## 12. 配置项
 
 建议每个服务实例具备以下配置：
 
@@ -437,6 +454,9 @@ OutboxRelayRetryInterval
 LogLevel
 MaxConn
 DrainTimeout
+GameRequestQueueWorkers
+GameRequestQueueCapacity
+GameRequestTimeout
 RecoveryControllerEnabled
 RouteFailureThreshold
 InstanceUnhealthyThreshold
@@ -449,7 +469,7 @@ InstanceUnhealthyThreshold
 - 密钥和数据库密码不进入文档和代码仓库。
 - TTL、心跳间隔、drain 超时需要和 LB 超时配套。
 
-## 12. 上线步骤
+## 13. 上线步骤
 
 标准发布流程：
 
@@ -470,7 +490,7 @@ InstanceUnhealthyThreshold
 - Redis key、MySQL 字段、etcd value 字段和 Kafka 事件 schema 变更要兼容至少一个发布周期。
 - 先回滚无状态服务，再处理长连接 `gatesrv` 的 drain。
 
-## 13. 监控和告警
+## 14. 监控和告警
 
 关键指标：
 

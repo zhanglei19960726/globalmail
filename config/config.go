@@ -36,6 +36,7 @@ type Config struct {
 	Etcd    EtcdConfig    `yaml:"etcd"`
 	Gate    GateConfig    `yaml:"gate"`
 	Acc     AccConfig     `yaml:"acc"`
+	Game    GameConfig    `yaml:"game"`
 }
 
 type ServiceConfig struct {
@@ -93,6 +94,12 @@ type AccConfig struct {
 	GameServiceAddr string   `yaml:"game_service_addr"`
 }
 
+type GameConfig struct {
+	RequestQueueWorkers  int      `yaml:"request_queue_workers"`
+	RequestQueueCapacity int      `yaml:"request_queue_capacity"`
+	RequestTimeout       Duration `yaml:"request_timeout"`
+}
+
 func Default() Config {
 	return Config{
 		Service: ServiceConfig{
@@ -134,6 +141,11 @@ func Default() Config {
 		Acc: AccConfig{
 			LoginTokenTTL:   Duration{Duration: 2 * time.Minute},
 			GameServiceAddr: "127.0.0.1:9001",
+		},
+		Game: GameConfig{
+			RequestQueueWorkers:  4,
+			RequestQueueCapacity: 1024,
+			RequestTimeout:       Duration{Duration: 3 * time.Second},
 		},
 	}
 }
@@ -196,6 +208,15 @@ func (c Config) Validate() error {
 	}
 	if c.Acc.GameServiceAddr == "" {
 		return errors.New("acc game service addr is required")
+	}
+	if c.Game.RequestQueueWorkers <= 0 {
+		return errors.New("game request queue workers must be positive")
+	}
+	if c.Game.RequestQueueCapacity <= 0 {
+		return errors.New("game request queue capacity must be positive")
+	}
+	if c.Game.RequestTimeout.Duration <= 0 {
+		return errors.New("game request timeout must be positive")
 	}
 	return nil
 }

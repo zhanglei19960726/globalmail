@@ -27,6 +27,11 @@ type Service struct {
 	now   func() time.Time
 }
 
+type LoginResult struct {
+	Token     routing.LoginToken
+	IsNewUser bool
+}
+
 func NewService(store LoginTokenStore, games GameLoginClient, ttl time.Duration) *Service {
 	if ttl <= 0 {
 		ttl = 2 * time.Minute
@@ -39,17 +44,17 @@ func NewService(store LoginTokenStore, games GameLoginClient, ttl time.Duration)
 	}
 }
 
-func (s *Service) Login(ctx context.Context, uid int64, serverID int) (routing.LoginToken, error) {
+func (s *Service) Login(ctx context.Context, uid int64, serverID int) (LoginResult, error) {
 	login, err := s.games.Login(ctx, &rpc.LoginRequest{
 		Uid:      uid,
 		ServerId: int32(serverID),
 	})
 	if err != nil {
-		return routing.LoginToken{}, err
+		return LoginResult{}, err
 	}
 	token, err := randomToken()
 	if err != nil {
-		return routing.LoginToken{}, err
+		return LoginResult{}, err
 	}
 	value := routing.LoginToken{
 		Token:    token,
@@ -59,9 +64,9 @@ func (s *Service) Login(ctx context.Context, uid int64, serverID int) (routing.L
 		ExpireAt: s.now().UTC().Add(s.ttl),
 	}
 	if err := s.store.SetLoginToken(ctx, value, s.ttl); err != nil {
-		return routing.LoginToken{}, err
+		return LoginResult{}, err
 	}
-	return value, nil
+	return LoginResult{Token: value, IsNewUser: login.GetIsNewUser()}, nil
 }
 
 func randomToken() (string, error) {
