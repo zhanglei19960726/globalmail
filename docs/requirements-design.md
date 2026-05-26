@@ -551,9 +551,11 @@ event:
 ```text
 1. gmsrv/mgrsrv 审核并发布全局邮件。
 2. MySQL 事务写 GlobalMail、GlobalMailCondition、GlobalMailOutboxEvent。
-3. 更新 Redis GlobalMailVersion 和全局邮件缓存。
-4. Outbox Relay 扫描 pending 事件并投递 Kafka。
-5. Kafka 投递成功后，Outbox Relay 标记事件为 published。
+3. MySQL 事务提交成功即返回发布成功（不等待 Redis 或 Kafka）。
+4. Outbox Relay 扫描 pending 事件并抢占处理。
+5. Outbox Relay 幂等更新 Redis 投影并推进 GlobalMailVersion。
+6. Outbox Relay 投递 Kafka GlobalMailChanged。
+7. Redis + Kafka 都成功后，Outbox Relay 标记事件为 published；失败则回退 pending 并重试。
 ```
 
 消费流程：
@@ -564,7 +566,8 @@ event:
 3. 如果本地版本落后，从 Redis 加载最新全局邮件缓存。
 4. Redis 缺失时受控回源 MySQL。
 5. 刷新 gamesrv 本地 GlobalMailLocalCache。
-6. 定时轮询 Redis GlobalMailVersion 作为兜底。
+6. 每台 gamesrv 使用独立 consumer group（推荐带 instance_id）。
+7. 定时轮询 Redis GlobalMailVersion 作为兜底。
 ```
 
 广播消费要求：
@@ -580,6 +583,39 @@ event:
 - 事件可能乱序，低于或等于本地版本的事件直接忽略。
 - Kafka 短暂不可用时，Outbox Relay 保留 pending 事件并重试。
 - 即使 Kafka 通知延迟，`gamesrv` 定时轮询 `GlobalMailVersion` 也能最终刷新。
+
+### 7.1 端到端一致性流程图（改造后）
+
+```mermaid
+flowchart TD
+    req[GM 发布请求] --> idem{幂等键是否已处理}
+    idem -->|是| replay[返回历史发布结果]
+    idem -->|否| tx[MySQL 事务写入<br/>GlobalMail+Condition+Outbox]
+    tx --> ok[事务成功即返回 201]
+
+    tx --> relayPoll[Outbox Relay 扫描 pending]
+    relayPoll --> claim[抢占事件并反序列化]
+    claim --> redisProj[幂等写 Redis 邮件投影]
+    redisProj --> ver[GlobalMailVersion 单调推进]
+    ver --> kafka[发布 GlobalMailChanged 到 Kafka]
+    kafka --> markPub[MarkPublished]
+
+    claim --> retry[任一步失败 MarkRetry]
+    redisProj --> retry
+    ver --> retry
+    kafka --> retry
+    retry --> relayPoll
+
+    markPub --> event[每台 gamesrv 消费事件<br/>独立 consumer group]
+    event --> refresh[ForceRefresh 或 RefreshIfStale]
+    refresh --> stale{本地版本是否落后}
+    stale -->|是| loadRedis[从 Redis 加载最新快照]
+    stale -->|否| keep[继续使用本地快照]
+    loadRedis --> swap[构建索引后原子替换本地缓存]
+    swap --> serve[读请求使用新快照]
+
+    timer[周期轮询 GlobalMailVersion] --> refresh
+```
 
 ## 8. gamesrv 本地缓存
 
