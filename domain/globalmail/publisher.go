@@ -2,12 +2,16 @@ package globalmail
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
 const EventTypeGlobalMailChanged = "GlobalMailChanged"
+
+var ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
 
 type PublisherService struct {
 	repo  MailRepository
@@ -26,9 +30,10 @@ func NewPublisherService(repo MailRepository, cache CacheRepository, ids IDGener
 }
 
 type PublishCommand struct {
-	Mail       GlobalMail
-	Conditions []Condition
-	Action     string
+	Mail           GlobalMail
+	Conditions     []Condition
+	Action         string
+	IdempotencyKey string
 }
 
 func (s *PublisherService) Publish(ctx context.Context, cmd PublishCommand) (GlobalMail, error) {
@@ -37,6 +42,26 @@ func (s *PublisherService) Publish(ctx context.Context, cmd PublishCommand) (Glo
 	}
 	if cmd.Action == "" {
 		cmd.Action = "publish"
+	}
+	requestHash, err := hashPublishCommand(cmd)
+	if err != nil {
+		return GlobalMail{}, err
+	}
+	if cmd.IdempotencyKey != "" {
+		record, ok, err := s.repo.GetPublishIdempotency(ctx, cmd.IdempotencyKey)
+		if err != nil {
+			return GlobalMail{}, err
+		}
+		if ok {
+			if record.RequestHash != requestHash {
+				return GlobalMail{}, ErrIdempotencyConflict
+			}
+			var mail GlobalMail
+			if err := json.Unmarshal(record.ResponseSnapshot, &mail); err != nil {
+				return GlobalMail{}, err
+			}
+			return mail, nil
+		}
 	}
 
 	now := s.now().UTC()
@@ -74,13 +99,29 @@ func (s *PublisherService) Publish(ctx context.Context, cmd PublishCommand) (Glo
 		UpdateTime:  now,
 	}
 
-	if err := s.repo.CreateGlobalMailWithOutbox(ctx, mail, outbox); err != nil {
+	if cmd.IdempotencyKey == "" {
+		if err := s.repo.CreateGlobalMailWithOutbox(ctx, mail, outbox); err != nil {
+			return GlobalMail{}, err
+		}
+		return mail, nil
+	}
+
+	responseSnapshot, err := json.Marshal(mail)
+	if err != nil {
 		return GlobalMail{}, err
 	}
-	if err := s.cache.SetGlobalMail(ctx, mail); err != nil {
-		return GlobalMail{}, err
+	record := PublishIdempotencyRecord{
+		Key:              cmd.IdempotencyKey,
+		Action:           cmd.Action,
+		RequestHash:      requestHash,
+		GlobalMailID:     mail.ID,
+		TargetVersion:    mail.Version,
+		Status:           IdempotencyStatusSucceeded,
+		ResponseSnapshot: responseSnapshot,
+		CreateTime:       now,
+		UpdateTime:       now,
 	}
-	if _, err := s.cache.IncrementGlobalMailVersion(ctx); err != nil {
+	if err := s.repo.CreateGlobalMailWithOutboxAndIdempotency(ctx, mail, outbox, record); err != nil {
 		return GlobalMail{}, err
 	}
 	return mail, nil
@@ -100,4 +141,22 @@ func validateMail(mail GlobalMail) error {
 		return errors.New("global mail expire time must be after start time")
 	}
 	return nil
+}
+
+func hashPublishCommand(cmd PublishCommand) (string, error) {
+	payload := struct {
+		Mail       GlobalMail  `json:"mail"`
+		Conditions []Condition `json:"conditions,omitempty"`
+		Action     string      `json:"action"`
+	}{
+		Mail:       cmd.Mail,
+		Conditions: cmd.Conditions,
+		Action:     cmd.Action,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", sum[:]), nil
 }

@@ -7,6 +7,9 @@ import (
 
 type MailRepository interface {
 	CreateGlobalMailWithOutbox(ctx context.Context, mail GlobalMail, event OutboxEvent) error
+	CreateGlobalMailWithOutboxAndIdempotency(ctx context.Context, mail GlobalMail, event OutboxEvent, record PublishIdempotencyRecord) error
+	GetPublishIdempotency(ctx context.Context, key string) (PublishIdempotencyRecord, bool, error)
+	GetGlobalMailByID(ctx context.Context, mailID int64) (GlobalMail, bool, error)
 	GetPublishedGlobalMails(ctx context.Context, now time.Time) ([]GlobalMail, error)
 	GetUserStates(ctx context.Context, roleID int64, mailIDs []int64) (map[int64]UserGlobalMailState, error)
 	SaveUserState(ctx context.Context, state UserGlobalMailState) error
@@ -15,6 +18,7 @@ type MailRepository interface {
 type CacheRepository interface {
 	GetGlobalMailVersion(ctx context.Context) (int64, error)
 	IncrementGlobalMailVersion(ctx context.Context) (int64, error)
+	AdvanceGlobalMailVersion(ctx context.Context, targetVersion int64) (int64, error)
 	GetGlobalMail(ctx context.Context, mailID int64) (GlobalMail, bool, error)
 	SetGlobalMail(ctx context.Context, mail GlobalMail) error
 	GetGlobalMailsByServer(ctx context.Context, serverID int) ([]int64, error)

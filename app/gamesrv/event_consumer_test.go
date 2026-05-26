@@ -21,7 +21,12 @@ func (r *fakeGlobalMailReader) ReadGlobalMailChanged(ctx context.Context) (globa
 }
 
 type fakeCacheRefresher struct {
-	calls int
+	version int64
+	calls   int
+}
+
+func (r *fakeCacheRefresher) CacheVersion() int64 {
+	return r.version
 }
 
 func (r *fakeCacheRefresher) ForceRefreshCache(context.Context) error {
@@ -33,7 +38,7 @@ func TestEventConsumerHandleRefreshesCache(t *testing.T) {
 	refresher := &fakeCacheRefresher{}
 	consumer := NewEventConsumer(&fakeGlobalMailReader{}, refresher)
 
-	err := consumer.Handle(context.Background(), globalmail.GlobalMailChangedEvent{GlobalMailID: 1})
+	err := consumer.Handle(context.Background(), globalmail.GlobalMailChangedEvent{GlobalMailID: 1, Version: 2})
 	if err != nil {
 		t.Fatalf("handle failed: %v", err)
 	}
@@ -46,8 +51,8 @@ func TestEventConsumerRunConsumesUntilContextCancel(t *testing.T) {
 	refresher := &fakeCacheRefresher{}
 	reader := &fakeGlobalMailReader{
 		events: []globalmail.GlobalMailChangedEvent{
-			{GlobalMailID: 1},
-			{GlobalMailID: 2},
+			{GlobalMailID: 1, Version: 1},
+			{GlobalMailID: 2, Version: 2},
 		},
 	}
 	consumer := NewEventConsumer(reader, refresher)
@@ -57,5 +62,18 @@ func TestEventConsumerRunConsumesUntilContextCancel(t *testing.T) {
 	}
 	if refresher.calls != 2 {
 		t.Fatalf("expected two refreshes, got %d", refresher.calls)
+	}
+}
+
+func TestEventConsumerIgnoresStaleVersion(t *testing.T) {
+	refresher := &fakeCacheRefresher{version: 3}
+	consumer := NewEventConsumer(&fakeGlobalMailReader{}, refresher)
+
+	err := consumer.Handle(context.Background(), globalmail.GlobalMailChangedEvent{GlobalMailID: 1, Version: 2})
+	if err != nil {
+		t.Fatalf("handle failed: %v", err)
+	}
+	if refresher.calls != 0 {
+		t.Fatalf("expected stale event ignored, got %d refreshes", refresher.calls)
 	}
 }

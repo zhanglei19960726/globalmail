@@ -109,3 +109,19 @@ type GlobalMailOutboxEventModel struct {
 func (GlobalMailOutboxEventModel) TableName() string {
 	return "global_mail_outbox_event"
 }
+
+type GlobalMailIdempotencyModel struct {
+	IdempotencyKey   string         `gorm:"column:idempotency_key;size:128;primaryKey"`
+	Action           string         `gorm:"column:action;size:32;not null"`
+	RequestHash      string         `gorm:"column:request_hash;size:64;not null"`
+	GlobalMailID     int64          `gorm:"column:global_mail_id;not null;index:idx_global_mail_id"`
+	TargetVersion    int64          `gorm:"column:target_version;not null"`
+	Status           string         `gorm:"column:status;size:32;not null"`
+	ResponseSnapshot datatypes.JSON `gorm:"column:response_snapshot;type:json;not null"`
+	CreateTime       time.Time      `gorm:"column:create_time;not null"`
+	UpdateTime       time.Time      `gorm:"column:update_time;not null"`
+}
+
+func (GlobalMailIdempotencyModel) TableName() string {
+	return "global_mail_idempotency"
+}

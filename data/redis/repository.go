@@ -35,6 +35,24 @@ func (r *Repository) IncrementGlobalMailVersion(ctx context.Context) (int64, err
 	return r.client.Incr(ctx, r.key("GlobalMailVersion")).Result()
 }
 
+func (r *Repository) AdvanceGlobalMailVersion(ctx context.Context, targetVersion int64) (int64, error) {
+	key := r.key("GlobalMailVersion")
+	script := `
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local target = tonumber(ARGV[1])
+if current < target then
+  redis.call("SET", KEYS[1], target)
+  return target
+end
+return current
+`
+	version, err := r.client.Eval(ctx, script, []string{key}, targetVersion).Int64()
+	if err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
 func (r *Repository) GetGlobalMail(ctx context.Context, mailID int64) (globalmail.GlobalMail, bool, error) {
 	payload, err := r.client.Get(ctx, r.globalMailKey(mailID)).Bytes()
 	if err == goredis.Nil {

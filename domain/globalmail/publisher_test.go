@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestPublisherCreatesMailOutboxAndCacheVersion(t *testing.T) {
+func TestPublisherCreatesMailAndOutbox(t *testing.T) {
 	repo := &fakeMailRepo{}
 	cache := &fakeCacheRepo{}
 	service := NewPublisherService(repo, cache, &fakeIDs{})
@@ -35,21 +35,65 @@ func TestPublisherCreatesMailOutboxAndCacheVersion(t *testing.T) {
 	if len(repo.events) != 1 {
 		t.Fatalf("expected 1 outbox event, got %d", len(repo.events))
 	}
-	if cache.version != 1 {
-		t.Fatalf("expected cache version 1, got %d", cache.version)
+	if cache.version != 0 {
+		t.Fatalf("expected publisher not to advance cache version, got %d", cache.version)
 	}
-	if _, ok := cache.mails[mail.ID]; !ok {
-		t.Fatal("expected mail cached")
+}
+
+func TestPublisherReplaysIdempotentPublish(t *testing.T) {
+	repo := &fakeMailRepo{}
+	cache := &fakeCacheRepo{}
+	service := NewPublisherService(repo, cache, &fakeIDs{})
+
+	start := time.Now().UTC()
+	cmd := PublishCommand{
+		IdempotencyKey: "publish-1",
+		Mail: GlobalMail{
+			Title:      "title",
+			Content:    "content",
+			Sender:     "system",
+			Category:   "global",
+			StartTime:  start,
+			ExpireTime: start.Add(time.Hour),
+		},
+	}
+	first, err := service.Publish(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("first publish failed: %v", err)
+	}
+	second, err := service.Publish(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("second publish failed: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("expected replayed mail id %d, got %d", first.ID, second.ID)
+	}
+	if len(repo.mails) != 1 {
+		t.Fatalf("expected one persisted mail, got %d", len(repo.mails))
 	}
 }
 
 func TestOutboxRelayPublishesPendingEvents(t *testing.T) {
 	payload := []byte(`{"event_id":1,"global_mail_id":10,"version":2,"action":"publish","timestamp":"2026-05-24T00:00:00Z"}`)
-	outbox := &fakeOutboxRepo{
-		pending: []OutboxEvent{{ID: 1, Payload: payload}},
+	mails := &fakeMailRepo{
+		mails: []GlobalMail{{
+			ID:         10,
+			Title:      "title",
+			Content:    "content",
+			Sender:     "system",
+			Category:   "global",
+			StartTime:  time.Now().Add(-time.Hour),
+			ExpireTime: time.Now().Add(time.Hour),
+			Status:     MailStatusPublished,
+			Version:    2,
+		}},
 	}
+	outbox := &fakeOutboxRepo{
+		pending: []OutboxEvent{{ID: 1, AggregateID: 10, Version: 2, Payload: payload}},
+	}
+	cache := &fakeCacheRepo{}
 	publisher := &fakePublisher{}
-	relay := NewOutboxRelay(outbox, publisher)
+	relay := NewOutboxRelay(outbox, mails, cache, publisher)
 
 	count, err := relay.Flush(context.Background(), 100)
 	if err != nil {
@@ -63,5 +107,11 @@ func TestOutboxRelayPublishesPendingEvents(t *testing.T) {
 	}
 	if len(outbox.sent) != 1 || outbox.sent[0] != 1 {
 		t.Fatalf("expected event marked published, got %#v", outbox.sent)
+	}
+	if cache.version != 2 {
+		t.Fatalf("expected cache version advanced to 2, got %d", cache.version)
+	}
+	if _, ok := cache.mails[10]; !ok {
+		t.Fatal("expected relay to write mail projection")
 	}
 }

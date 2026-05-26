@@ -103,6 +103,34 @@ func toOutboxEvent(model GlobalMailOutboxEventModel) globalmail.OutboxEvent {
 	}
 }
 
+func toIdempotencyModel(record globalmail.PublishIdempotencyRecord) GlobalMailIdempotencyModel {
+	return GlobalMailIdempotencyModel{
+		IdempotencyKey:   record.Key,
+		Action:           record.Action,
+		RequestHash:      record.RequestHash,
+		GlobalMailID:     record.GlobalMailID,
+		TargetVersion:    record.TargetVersion,
+		Status:           string(record.Status),
+		ResponseSnapshot: datatypes.JSON(record.ResponseSnapshot),
+		CreateTime:       record.CreateTime,
+		UpdateTime:       record.UpdateTime,
+	}
+}
+
+func toIdempotencyRecord(model GlobalMailIdempotencyModel) globalmail.PublishIdempotencyRecord {
+	return globalmail.PublishIdempotencyRecord{
+		Key:              model.IdempotencyKey,
+		Action:           model.Action,
+		RequestHash:      model.RequestHash,
+		GlobalMailID:     model.GlobalMailID,
+		TargetVersion:    model.TargetVersion,
+		Status:           globalmail.IdempotencyStatus(model.Status),
+		ResponseSnapshot: json.RawMessage(model.ResponseSnapshot),
+		CreateTime:       model.CreateTime,
+		UpdateTime:       model.UpdateTime,
+	}
+}
+
 func toStateModel(state globalmail.UserGlobalMailState) UserGlobalMailStateModel {
 	payload, _ := json.Marshal(state.ClaimedLootIndexes)
 	return UserGlobalMailStateModel{

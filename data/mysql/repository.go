@@ -25,10 +25,20 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserGlobalMailStateModel{},
 		&UserMailCursorModel{},
 		&GlobalMailOutboxEventModel{},
+		&GlobalMailIdempotencyModel{},
 	)
 }
 
 func (r *Repository) CreateGlobalMailWithOutbox(ctx context.Context, mail globalmail.GlobalMail, event globalmail.OutboxEvent) error {
+	return r.createGlobalMailWithOutbox(ctx, mail, event, nil)
+}
+
+func (r *Repository) CreateGlobalMailWithOutboxAndIdempotency(ctx context.Context, mail globalmail.GlobalMail, event globalmail.OutboxEvent, record globalmail.PublishIdempotencyRecord) error {
+	model := toIdempotencyModel(record)
+	return r.createGlobalMailWithOutbox(ctx, mail, event, &model)
+}
+
+func (r *Repository) createGlobalMailWithOutbox(ctx context.Context, mail globalmail.GlobalMail, event globalmail.OutboxEvent, record *GlobalMailIdempotencyModel) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		mailModel := toGlobalMailModel(mail)
 		if err := tx.Create(&mailModel).Error; err != nil {
@@ -44,8 +54,50 @@ func (r *Repository) CreateGlobalMailWithOutbox(ctx context.Context, mail global
 			}
 		}
 		outbox := toOutboxModel(event)
-		return tx.Create(&outbox).Error
+		if err := tx.Create(&outbox).Error; err != nil {
+			return err
+		}
+		if record != nil {
+			if err := tx.Create(record).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+func (r *Repository) GetPublishIdempotency(ctx context.Context, key string) (globalmail.PublishIdempotencyRecord, bool, error) {
+	var model GlobalMailIdempotencyModel
+	err := r.db.WithContext(ctx).
+		Where("idempotency_key = ?", key).
+		First(&model).Error
+	if err == gorm.ErrRecordNotFound {
+		return globalmail.PublishIdempotencyRecord{}, false, nil
+	}
+	if err != nil {
+		return globalmail.PublishIdempotencyRecord{}, false, err
+	}
+	return toIdempotencyRecord(model), true, nil
+}
+
+func (r *Repository) GetGlobalMailByID(ctx context.Context, mailID int64) (globalmail.GlobalMail, bool, error) {
+	var model GlobalMailModel
+	err := r.db.WithContext(ctx).
+		Where("global_mail_id = ?", mailID).
+		First(&model).Error
+	if err == gorm.ErrRecordNotFound {
+		return globalmail.GlobalMail{}, false, nil
+	}
+	if err != nil {
+		return globalmail.GlobalMail{}, false, err
+	}
+	var conditions []GlobalMailConditionModel
+	if err := r.db.WithContext(ctx).
+		Where("global_mail_id = ?", model.GlobalMailID).
+		Find(&conditions).Error; err != nil {
+		return globalmail.GlobalMail{}, false, err
+	}
+	return toGlobalMail(model, conditions), true, nil
 }
 
 func (r *Repository) GetPublishedGlobalMails(ctx context.Context, now time.Time) ([]globalmail.GlobalMail, error) {

@@ -36,6 +36,10 @@ func (s *MailService) RefreshCache(ctx context.Context) error {
 	return s.cache.RefreshIfStale(ctx)
 }
 
+func (s *MailService) CacheVersion() int64 {
+	return s.cache.Snapshot().Version
+}
+
 func (s *MailService) ForceRefreshCache(ctx context.Context) error {
 	return s.cache.ForceRefresh(ctx)
 }
@@ -83,6 +87,9 @@ func (s *MailService) ListGlobalMails(ctx context.Context, profile globalmail.Us
 
 func (s *MailService) MarkGlobalMailRead(ctx context.Context, profile globalmail.UserProfile, mailID int64) (globalmail.UserGlobalMailState, error) {
 	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) globalmail.UserGlobalMailState {
+		if state.Status == globalmail.UserMailStatusDeleted {
+			return state
+		}
 		if state.Status == "" || state.Status == globalmail.UserMailStatusUnread {
 			state.Status = globalmail.UserMailStatusRead
 		}
@@ -93,6 +100,9 @@ func (s *MailService) MarkGlobalMailRead(ctx context.Context, profile globalmail
 
 func (s *MailService) ClaimGlobalMail(ctx context.Context, profile globalmail.UserProfile, mailID int64, lootIndexes []int) (globalmail.UserGlobalMailState, error) {
 	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) globalmail.UserGlobalMailState {
+		if state.Status == globalmail.UserMailStatusDeleted {
+			return state
+		}
 		state.Status = globalmail.UserMailStatusClaimed
 		state.ClaimedLootIndexes = mergeLootIndexes(state.ClaimedLootIndexes, lootIndexes)
 		if state.ClaimTime == nil {

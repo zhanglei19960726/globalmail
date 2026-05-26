@@ -9,6 +9,7 @@ import (
 	"globalmail/app/bootstrap"
 	"globalmail/app/outboxrelay"
 	"globalmail/data/mysql"
+	redisdata "globalmail/data/redis"
 	"globalmail/domain/globalmail"
 	"globalmail/infra/kafka"
 )
@@ -35,10 +36,13 @@ func main() {
 	}
 
 	repo := mysql.NewRepository(db)
+	redisClient := redisdata.NewClient(cfg.Redis)
+	defer redisClient.Close()
+	cacheRepo := redisdata.NewRepository(redisClient, cfg.Redis.KeyPrefix)
 	publisher := kafka.NewGlobalMailPublisher(cfg.Kafka)
 	defer publisher.Close()
 
-	relay := globalmail.NewOutboxRelay(repo, publisher)
+	relay := globalmail.NewOutboxRelay(repo, repo, cacheRepo, publisher)
 	worker := outboxrelay.NewWorker(relay, *limit, *interval, log.Default())
 
 	ctx, stop := bootstrap.SignalContext(context.Background())

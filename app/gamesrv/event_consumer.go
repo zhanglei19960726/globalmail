@@ -12,6 +12,7 @@ type GlobalMailChangedReader interface {
 }
 
 type GlobalMailCacheRefresher interface {
+	CacheVersion() int64
 	ForceRefreshCache(ctx context.Context) error
 }
 
@@ -39,6 +40,9 @@ func (c *EventConsumer) Run(ctx context.Context) error {
 	}
 }
 
-func (c *EventConsumer) Handle(ctx context.Context, _ globalmail.GlobalMailChangedEvent) error {
+func (c *EventConsumer) Handle(ctx context.Context, event globalmail.GlobalMailChangedEvent) error {
+	if event.Version > 0 && event.Version <= c.refresher.CacheVersion() {
+		return nil
+	}
 	return c.refresher.ForceRefreshCache(ctx)
 }

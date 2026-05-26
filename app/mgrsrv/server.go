@@ -31,14 +31,15 @@ func (s *Server) routes() {
 }
 
 type publishGlobalMailRequest struct {
-	OperatorID int64                  `json:"opr_id"`
-	Title      string                 `json:"title"`
-	Content    string                 `json:"content"`
-	Sender     string                 `json:"sender"`
-	Category   string                 `json:"mail_category"`
-	StartTime  time.Time              `json:"start_time"`
-	ExpireTime time.Time              `json:"expire_time"`
-	Conditions []globalmail.Condition `json:"conditions"`
+	IdempotencyKey string                 `json:"idempotency_key"`
+	OperatorID     int64                  `json:"opr_id"`
+	Title          string                 `json:"title"`
+	Content        string                 `json:"content"`
+	Sender         string                 `json:"sender"`
+	Category       string                 `json:"mail_category"`
+	StartTime      time.Time              `json:"start_time"`
+	ExpireTime     time.Time              `json:"expire_time"`
+	Conditions     []globalmail.Condition `json:"conditions"`
 }
 
 func (s *Server) handlePublishGlobalMail(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +53,11 @@ func (s *Server) handlePublishGlobalMail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	idempotencyKey := req.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = r.Header.Get("Idempotency-Key")
+	}
+
 	mail, err := s.publisher.Publish(r.Context(), globalmail.PublishCommand{
 		Mail: globalmail.GlobalMail{
 			OperatorID: req.OperatorID,
@@ -62,8 +68,9 @@ func (s *Server) handlePublishGlobalMail(w http.ResponseWriter, r *http.Request)
 			StartTime:  req.StartTime,
 			ExpireTime: req.ExpireTime,
 		},
-		Conditions: req.Conditions,
-		Action:     "publish",
+		Conditions:     req.Conditions,
+		Action:         "publish",
+		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

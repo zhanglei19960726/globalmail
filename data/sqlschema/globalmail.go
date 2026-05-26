@@ -97,4 +97,18 @@ CREATE TABLE IF NOT EXISTS global_mail_outbox_event (
     KEY idx_status_retry (status, next_retry_time),
     KEY idx_aggregate_version (aggregate_id, version)
 ) COMMENT='全局邮件事件Outbox表';
+
+CREATE TABLE IF NOT EXISTS global_mail_idempotency (
+    idempotency_key   VARCHAR(128) NOT NULL COMMENT '幂等键',
+    action            VARCHAR(32)  NOT NULL COMMENT 'publish/update/offline/delete',
+    request_hash      VARCHAR(64)  NOT NULL COMMENT '请求内容hash',
+    global_mail_id    BIGINT       NOT NULL COMMENT '全局邮件ID',
+    target_version    BIGINT       NOT NULL COMMENT '目标版本',
+    status            VARCHAR(32)  NOT NULL COMMENT 'succeeded/failed',
+    response_snapshot JSON         NOT NULL COMMENT '历史响应快照',
+    create_time       DATETIME     NOT NULL,
+    update_time       DATETIME     NOT NULL,
+    PRIMARY KEY (idempotency_key),
+    KEY idx_global_mail_id (global_mail_id)
+) COMMENT='全局邮件发布幂等表';
 `

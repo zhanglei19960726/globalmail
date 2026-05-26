@@ -32,6 +32,12 @@ const (
 	OutboxStatusFailed    OutboxStatus = "failed"
 )
 
+type IdempotencyStatus string
+
+const (
+	IdempotencyStatusSucceeded IdempotencyStatus = "succeeded"
+)
+
 type GlobalMail struct {
 	ID          int64           `json:"global_mail_id"`
 	OperatorID  int64           `json:"opr_id"`
@@ -122,4 +128,16 @@ type GlobalMailChangedEvent struct {
 	Version      int64     `json:"version"`
 	Action       string    `json:"action"`
 	Timestamp    time.Time `json:"timestamp"`
+}
+
+type PublishIdempotencyRecord struct {
+	Key              string            `json:"idempotency_key"`
+	Action           string            `json:"action"`
+	RequestHash      string            `json:"request_hash"`
+	GlobalMailID     int64             `json:"global_mail_id"`
+	TargetVersion    int64             `json:"target_version"`
+	Status           IdempotencyStatus `json:"status"`
+	ResponseSnapshot json.RawMessage   `json:"response_snapshot"`
+	CreateTime       time.Time         `json:"create_time"`
+	UpdateTime       time.Time         `json:"update_time"`
 }

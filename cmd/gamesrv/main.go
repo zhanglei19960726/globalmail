@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"time"
 
 	"globalmail/api/rpc"
 	"globalmail/app/bootstrap"
@@ -105,7 +106,7 @@ func main() {
 	defer consumer.Close()
 
 	eventConsumer := gamesrv.NewEventConsumer(consumer, mailService)
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		log.Printf("gamesrv %s grpc listening on %s", cfg.Service.InstanceID, cfg.Service.ListenAddr)
 		errCh <- grpcServer.Serve(listener)
@@ -113,6 +114,10 @@ func main() {
 	go func() {
 		log.Printf("gamesrv %s consuming global mail events", cfg.Service.InstanceID)
 		errCh <- eventConsumer.Run(ctx)
+	}()
+	go func() {
+		log.Printf("gamesrv %s polling global mail version", cfg.Service.InstanceID)
+		errCh <- gamesrv.RunGlobalMailCachePoller(ctx, mailService, 30*time.Second, log.Default())
 	}()
 	go func() {
 		<-ctx.Done()

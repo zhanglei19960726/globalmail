@@ -17,6 +17,23 @@ func (f *fakeMailRepository) CreateGlobalMailWithOutbox(context.Context, globalm
 	return nil
 }
 
+func (f *fakeMailRepository) CreateGlobalMailWithOutboxAndIdempotency(context.Context, globalmail.GlobalMail, globalmail.OutboxEvent, globalmail.PublishIdempotencyRecord) error {
+	return nil
+}
+
+func (f *fakeMailRepository) GetPublishIdempotency(context.Context, string) (globalmail.PublishIdempotencyRecord, bool, error) {
+	return globalmail.PublishIdempotencyRecord{}, false, nil
+}
+
+func (f *fakeMailRepository) GetGlobalMailByID(_ context.Context, mailID int64) (globalmail.GlobalMail, bool, error) {
+	for _, mail := range f.mails {
+		if mail.ID == mailID {
+			return mail, true, nil
+		}
+	}
+	return globalmail.GlobalMail{}, false, nil
+}
+
 func (f *fakeMailRepository) GetPublishedGlobalMails(context.Context, time.Time) ([]globalmail.GlobalMail, error) {
 	return append([]globalmail.GlobalMail(nil), f.mails...), nil
 }
@@ -49,6 +66,13 @@ func (f *fakeCacheRepository) GetGlobalMailVersion(context.Context) (int64, erro
 
 func (f *fakeCacheRepository) IncrementGlobalMailVersion(context.Context) (int64, error) {
 	f.version++
+	return f.version, nil
+}
+
+func (f *fakeCacheRepository) AdvanceGlobalMailVersion(_ context.Context, targetVersion int64) (int64, error) {
+	if f.version < targetVersion {
+		f.version = targetVersion
+	}
 	return f.version, nil
 }
 
@@ -225,5 +249,56 @@ func TestMailServiceDeleteGlobalMailWritesDeletedState(t *testing.T) {
 	}
 	if state.Status != globalmail.UserMailStatusDeleted || state.DeleteTime == nil {
 		t.Fatalf("expected deleted state with delete time, got %+v", state)
+	}
+}
+
+func TestMailServiceDeletedStateIsNotOverwritten(t *testing.T) {
+	now := time.Now().UTC()
+	deleteTime := now.Add(-time.Minute)
+	repo := &fakeMailRepository{
+		mails: []globalmail.GlobalMail{
+			{
+				ID:         1,
+				Status:     globalmail.MailStatusPublished,
+				StartTime:  now.Add(-time.Hour),
+				ExpireTime: now.Add(time.Hour),
+			},
+		},
+		states: map[int64]globalmail.UserGlobalMailState{
+			1: {
+				RoleID:       10001,
+				ServerID:     1,
+				GlobalMailID: 1,
+				Status:       globalmail.UserMailStatusDeleted,
+				DeleteTime:   &deleteTime,
+				Version:      1,
+			},
+		},
+	}
+	cacheRepo := &fakeCacheRepository{version: 1}
+	localCache := globalmail.NewLocalCache(repo, cacheRepo)
+	localCache.ForceRefresh(context.Background())
+	service := NewMailService(repo, localCache)
+
+	state, err := service.MarkGlobalMailRead(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1)
+	if err != nil {
+		t.Fatalf("mark read failed: %v", err)
+	}
+	if state.Status != globalmail.UserMailStatusDeleted {
+		t.Fatalf("expected deleted state preserved, got %s", state.Status)
+	}
+
+	state, err = service.ClaimGlobalMail(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1, []int{0})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if state.Status != globalmail.UserMailStatusDeleted {
+		t.Fatalf("expected deleted state preserved after claim, got %s", state.Status)
 	}
 }

@@ -19,15 +19,40 @@ func (f *fakeIDs) NextID() int64 {
 }
 
 type fakeMailRepo struct {
-	mails  []GlobalMail
-	events []OutboxEvent
-	states map[int64]UserGlobalMailState
+	mails       []GlobalMail
+	events      []OutboxEvent
+	idempotency map[string]PublishIdempotencyRecord
+	states      map[int64]UserGlobalMailState
 }
 
 func (f *fakeMailRepo) CreateGlobalMailWithOutbox(_ context.Context, mail GlobalMail, event OutboxEvent) error {
 	f.mails = append(f.mails, mail)
 	f.events = append(f.events, event)
 	return nil
+}
+
+func (f *fakeMailRepo) CreateGlobalMailWithOutboxAndIdempotency(_ context.Context, mail GlobalMail, event OutboxEvent, record PublishIdempotencyRecord) error {
+	f.mails = append(f.mails, mail)
+	f.events = append(f.events, event)
+	if f.idempotency == nil {
+		f.idempotency = map[string]PublishIdempotencyRecord{}
+	}
+	f.idempotency[record.Key] = record
+	return nil
+}
+
+func (f *fakeMailRepo) GetPublishIdempotency(_ context.Context, key string) (PublishIdempotencyRecord, bool, error) {
+	record, ok := f.idempotency[key]
+	return record, ok, nil
+}
+
+func (f *fakeMailRepo) GetGlobalMailByID(_ context.Context, mailID int64) (GlobalMail, bool, error) {
+	for _, mail := range f.mails {
+		if mail.ID == mailID {
+			return mail, true, nil
+		}
+	}
+	return GlobalMail{}, false, nil
 }
 
 func (f *fakeMailRepo) GetPublishedGlobalMails(_ context.Context, now time.Time) ([]GlobalMail, error) {
@@ -69,6 +94,13 @@ func (f *fakeCacheRepo) GetGlobalMailVersion(context.Context) (int64, error) {
 
 func (f *fakeCacheRepo) IncrementGlobalMailVersion(context.Context) (int64, error) {
 	f.version++
+	return f.version, nil
+}
+
+func (f *fakeCacheRepo) AdvanceGlobalMailVersion(_ context.Context, targetVersion int64) (int64, error) {
+	if f.version < targetVersion {
+		f.version = targetVersion
+	}
 	return f.version, nil
 }
 
