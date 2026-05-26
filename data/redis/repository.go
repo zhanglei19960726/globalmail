@@ -81,6 +81,39 @@ func (r *Repository) SetGlobalMail(ctx context.Context, mail globalmail.GlobalMa
 	return r.client.Set(ctx, r.globalMailKey(mail.ID), payload, ttl).Err()
 }
 
+func (r *Repository) GetActiveGlobalMailIDs(ctx context.Context, now time.Time) ([]int64, error) {
+	members, err := r.client.ZRangeByScore(ctx, r.key("GlobalMailActiveIndex"), &goredis.ZRangeBy{
+		Min: fmt.Sprintf("%d", now.Unix()),
+		Max: "+inf",
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(members))
+	for _, member := range members {
+		var id int64
+		if _, err := fmt.Sscan(member, &id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (r *Repository) AddGlobalMailToIndexes(ctx context.Context, mail globalmail.GlobalMail) error {
+	pipe := r.client.TxPipeline()
+	member := fmt.Sprintf("%d", mail.ID)
+	pipe.ZAdd(ctx, r.key("GlobalMailActiveIndex"), goredis.Z{
+		Score:  float64(mail.ExpireTime.Unix()),
+		Member: member,
+	})
+	for _, serverID := range serverIDsFromConditions(mail.Conditions) {
+		pipe.SAdd(ctx, r.globalMailByServerKey(serverID), member)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (r *Repository) GetGlobalMailsByServer(ctx context.Context, serverID int) ([]int64, error) {
 	members, err := r.client.SMembers(ctx, r.globalMailByServerKey(serverID)).Result()
 	if err != nil {
@@ -152,4 +185,23 @@ func (r *Repository) globalMailByServerKey(serverID int) string {
 
 func (r *Repository) userProfileKey(roleID int64) string {
 	return fmt.Sprintf("%sMailUserProfile:%d", r.prefix, roleID)
+}
+
+func serverIDsFromConditions(conditions []globalmail.Condition) []int {
+	var serverIDs []int
+	for _, condition := range conditions {
+		if condition.Type != "server" && condition.Type != "server_id" {
+			continue
+		}
+		var ids []int
+		if err := json.Unmarshal(condition.Value, &ids); err == nil {
+			serverIDs = append(serverIDs, ids...)
+			continue
+		}
+		var id int
+		if err := json.Unmarshal(condition.Value, &id); err == nil {
+			serverIDs = append(serverIDs, id)
+		}
+	}
+	return serverIDs
 }

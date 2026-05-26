@@ -10,11 +10,12 @@ import (
 )
 
 type LocalCache struct {
-	repo  MailRepository
-	cache CacheRepository
-	value atomic.Value // *CacheSnapshot
-	mu    sync.Mutex
-	now   func() time.Time
+	repo    MailRepository
+	cache   CacheRepository
+	metrics ConsistencyMetrics
+	value   atomic.Value // *CacheSnapshot
+	mu      sync.Mutex
+	now     func() time.Time
 }
 
 type CacheSnapshot struct {
@@ -80,9 +81,24 @@ func (c *LocalCache) ForceRefresh(ctx context.Context) error {
 
 func (c *LocalCache) refresh(ctx context.Context, version int64) error {
 	now := c.now().UTC()
-	mails, err := c.repo.GetPublishedGlobalMails(ctx, now)
+	start := now
+	source := "redis"
+	defer func() {
+		c.observeDuration("globalmail_cache_refresh_seconds", c.now().UTC().Sub(start), map[string]string{"source": source})
+	}()
+	mails, ok, err := c.loadFromSharedCache(ctx, now)
 	if err != nil {
+		c.incCounter("globalmail_cache_refresh_errors_total", map[string]string{"stage": "redis"})
 		return err
+	}
+	if !ok {
+		source = "mysql"
+		c.incCounter("globalmail_cache_l2_miss_total", nil)
+		mails, err = c.rebuildSharedCache(ctx, version, now)
+		if err != nil {
+			c.incCounter("globalmail_cache_refresh_errors_total", map[string]string{"stage": "mysql"})
+			return err
+		}
 	}
 
 	next := &CacheSnapshot{
@@ -105,6 +121,53 @@ func (c *LocalCache) refresh(ctx context.Context, version int64) error {
 	}
 	c.value.Store(next)
 	return nil
+}
+
+func (c *LocalCache) rebuildSharedCache(ctx context.Context, version int64, now time.Time) ([]GlobalMail, error) {
+	result, err, shared := globalMailCacheRebuilds.Do(strconv.FormatInt(version, 10), func() (interface{}, error) {
+		mails, err := c.repo.GetPublishedGlobalMails(ctx, now)
+		if err != nil {
+			return nil, err
+		}
+		for _, mail := range mails {
+			if err := c.cache.SetGlobalMail(ctx, mail); err != nil {
+				return nil, err
+			}
+			if err := c.cache.AddGlobalMailToIndexes(ctx, mail); err != nil {
+				return nil, err
+			}
+		}
+		return mails, nil
+	})
+	if shared {
+		c.incCounter("globalmail_cache_rebuild_shared_total", nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result.([]GlobalMail), nil
+}
+
+func (c *LocalCache) loadFromSharedCache(ctx context.Context, now time.Time) ([]GlobalMail, bool, error) {
+	mailIDs, err := c.cache.GetActiveGlobalMailIDs(ctx, now)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(mailIDs) == 0 {
+		return nil, false, nil
+	}
+	mails := make([]GlobalMail, 0, len(mailIDs))
+	for _, mailID := range mailIDs {
+		mail, ok, err := c.cache.GetGlobalMail(ctx, mailID)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		mails = append(mails, mail)
+	}
+	return mails, true, nil
 }
 
 func (c *LocalCache) VisibleMails(ctx context.Context, profile UserProfile) ([]GlobalMail, error) {

@@ -9,8 +9,11 @@ import (
 )
 
 type fakeMailRepository struct {
-	mails  []globalmail.GlobalMail
-	states map[int64]globalmail.UserGlobalMailState
+	mails        []globalmail.GlobalMail
+	states       map[int64]globalmail.UserGlobalMailState
+	grants       map[string]globalmail.RewardGrant
+	grantCalls   int
+	failSaveOnce bool
 }
 
 func (f *fakeMailRepository) CreateGlobalMailWithOutbox(context.Context, globalmail.GlobalMail, globalmail.OutboxEvent) error {
@@ -49,11 +52,27 @@ func (f *fakeMailRepository) GetUserStates(_ context.Context, _ int64, mailIDs [
 }
 
 func (f *fakeMailRepository) SaveUserState(_ context.Context, state globalmail.UserGlobalMailState) error {
+	if f.failSaveOnce {
+		f.failSaveOnce = false
+		return context.Canceled
+	}
 	if f.states == nil {
 		f.states = map[int64]globalmail.UserGlobalMailState{}
 	}
 	f.states[state.GlobalMailID] = state
 	return nil
+}
+
+func (f *fakeMailRepository) GrantGlobalMailReward(_ context.Context, grant globalmail.RewardGrant) (bool, error) {
+	f.grantCalls++
+	if f.grants == nil {
+		f.grants = map[string]globalmail.RewardGrant{}
+	}
+	if _, ok := f.grants[grant.GrantKey]; ok {
+		return false, nil
+	}
+	f.grants[grant.GrantKey] = grant
+	return true, nil
 }
 
 type fakeCacheRepository struct {
@@ -81,6 +100,14 @@ func (f *fakeCacheRepository) GetGlobalMail(context.Context, int64) (globalmail.
 }
 
 func (f *fakeCacheRepository) SetGlobalMail(context.Context, globalmail.GlobalMail) error {
+	return nil
+}
+
+func (f *fakeCacheRepository) GetActiveGlobalMailIDs(context.Context, time.Time) ([]int64, error) {
+	return nil, nil
+}
+
+func (f *fakeCacheRepository) AddGlobalMailToIndexes(context.Context, globalmail.GlobalMail) error {
 	return nil
 }
 
@@ -219,6 +246,53 @@ func TestMailServiceClaimGlobalMailIsIdempotent(t *testing.T) {
 	}
 	if len(state.ClaimedLootIndexes) != 2 || state.ClaimedLootIndexes[0] != 0 || state.ClaimedLootIndexes[1] != 2 {
 		t.Fatalf("unexpected claimed loot indexes: %+v", state.ClaimedLootIndexes)
+	}
+	if repo.grantCalls != 1 {
+		t.Fatalf("expected only new loot index to be granted, got %d calls", repo.grantCalls)
+	}
+}
+
+func TestMailServiceClaimRetryUsesRewardLedgerIdempotency(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeMailRepository{
+		mails: []globalmail.GlobalMail{
+			{
+				ID:         1,
+				Status:     globalmail.MailStatusPublished,
+				StartTime:  now.Add(-time.Hour),
+				ExpireTime: now.Add(time.Hour),
+			},
+		},
+		states:       map[int64]globalmail.UserGlobalMailState{},
+		failSaveOnce: true,
+	}
+	cacheRepo := &fakeCacheRepository{version: 1}
+	localCache := globalmail.NewLocalCache(repo, cacheRepo)
+	localCache.ForceRefresh(context.Background())
+	service := NewMailService(repo, localCache)
+
+	_, err := service.ClaimGlobalMail(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1, []int{0})
+	if err == nil {
+		t.Fatal("expected first claim to fail while saving state")
+	}
+	state, err := service.ClaimGlobalMail(context.Background(), globalmail.UserProfile{
+		RoleID:   10001,
+		ServerID: 1,
+	}, 1, []int{0})
+	if err != nil {
+		t.Fatalf("retry claim failed: %v", err)
+	}
+	if state.Status != globalmail.UserMailStatusClaimed {
+		t.Fatalf("expected claimed state, got %s", state.Status)
+	}
+	if repo.grantCalls != 2 {
+		t.Fatalf("expected retry to call ledger again safely, got %d calls", repo.grantCalls)
+	}
+	if len(repo.grants) != 1 {
+		t.Fatalf("expected one idempotent reward ledger row, got %d", len(repo.grants))
 	}
 }
 

@@ -326,18 +326,24 @@ request_hash
 - 奖励服务幂等冲突或补偿任务失败。
 - Redis 回源 MySQL 重建频率异常升高。
 
-## 13. 当前实现差距和后续改造点
+## 13. 当前实现状态和后续改造点
 
-当前代码已经具备 MySQL 事务写业务数据和 outbox、Outbox Relay 投递 Kafka、玩家状态 upsert、`gamesrv` 本地缓存刷新等骨架。目标方案还需要补齐以下能力：
+当前代码已经落地了核心一致性链路：
 
-- 发布接口增加 `idempotency_key` 和幂等记录表。
-- Outbox Relay 接管 Redis 投影写入、`GlobalMailVersion` 推进和 Kafka 投递的完整链路。
-- Outbox 表增加抢占锁、最大重试、失败原因和人工处理状态。
-- Redis 投影写入增加版本条件，防止旧事件覆盖新投影。
-- `gamesrv` 消费事件时按 `event.version` 判旧，并增加定时轮询 `GlobalMailVersion`。
-- 本地缓存刷新优先走 Redis L2，缺失时再受控回源 MySQL。
-- 玩家状态更新增加状态机保护和乐观锁，避免无条件 upsert 覆盖终态。
-- 领取链路接入奖励账本或奖励服务幂等流水。
-- 写命令增加请求级幂等记录，处理 `504` 后客户端重试。
+- 发布接口支持 `idempotency_key`，幂等记录与业务表、outbox 在同一 MySQL 事务内写入。
+- Outbox Relay 已接管 Redis 投影写入、索引维护、`GlobalMailVersion` 推进和 Kafka 投递。
+- Outbox 表具备 `pending`、`processing`、`published`、`failed` 状态，以及抢占锁、最大重试和失败原因。
+- Redis 投影和版本推进按目标版本幂等执行，旧事件不会回退 `GlobalMailVersion`。
+- `gamesrv` 消费事件时按 `event.version` 判旧，并通过定时轮询 `GlobalMailVersion` 兜底刷新。
+- 本地缓存刷新优先走 Redis L2；L2 缺失时回源 MySQL 并重建 Redis 投影，同进程内回源会通过 singleflight 合并。
+- 玩家状态更新已保护删除终态，领取链路接入奖励账本，按 `role_id + global_mail_id + loot_index` 防重复发奖。
+- 写命令已增加请求级幂等缓存，处理同一 `uid + command_id + seq` 的重复请求。
 
-这些改造应分阶段落地，但文档中的一致性和幂等规则作为后续实现验收标准。
+仍在后续演进中的能力：
+
+- 请求级幂等目前是 `gamesrv` 进程内缓存；生产环境如需跨重启回放历史响应，应落到 Redis 或 MySQL。
+- 奖励流水当前是本模块账本；接入真实奖励服务时，需要记录外部奖励服务流水、返回状态和补偿任务。
+- 监控指标已预留轻量埋点接口，仍需要接入 Prometheus、OpenTelemetry 或项目现有监控后端。
+- Redis L2 回源当前支持同进程 singleflight；多实例同时回源时，如压力较大，可继续增加 Redis 分布式 rebuild lock。
+
+这些改造可以按生产接入程度继续推进，文档中的一致性和幂等规则仍作为后续实现验收标准。

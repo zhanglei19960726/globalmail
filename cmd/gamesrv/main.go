@@ -5,7 +5,6 @@ import (
 	"flag"
 	"log"
 	"net"
-	"time"
 
 	"globalmail/api/rpc"
 	"globalmail/app/bootstrap"
@@ -70,7 +69,8 @@ func main() {
 	if err := gamesrv.RegisterMailCommandHandlers(commandRegistry, mailRPCServer); err != nil {
 		log.Fatalf("register mail commands: %v", err)
 	}
-	commandQueue := gamesrv.NewCommandRequestQueue(commandRegistry, gamesrv.CommandQueueOptions{
+	idempotentDispatcher := gamesrv.NewIdempotentCommandDispatcher(commandRegistry)
+	commandQueue := gamesrv.NewCommandRequestQueue(idempotentDispatcher, gamesrv.CommandQueueOptions{
 		Workers:           cfg.Game.RequestQueueWorkers,
 		Capacity:          cfg.Game.RequestQueueCapacity,
 		RoleQueueCapacity: cfg.Game.RequestRoleQueueCapacity,
@@ -117,7 +117,7 @@ func main() {
 	}()
 	go func() {
 		log.Printf("gamesrv %s polling global mail version", cfg.Service.InstanceID)
-		errCh <- gamesrv.RunGlobalMailCachePoller(ctx, mailService, 30*time.Second, log.Default())
+		errCh <- gamesrv.RunGlobalMailCachePoller(ctx, mailService, cfg.Game.GlobalMailPollInterval.Duration, log.Default())
 	}()
 	go func() {
 		<-ctx.Done()

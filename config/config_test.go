@@ -39,6 +39,12 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Game.RequestTimeout.Duration != 3*time.Second {
 		t.Fatalf("unexpected game request timeout: %s", cfg.Game.RequestTimeout.Duration)
 	}
+	if cfg.Game.GlobalMailPollInterval.Duration != 30*time.Second {
+		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	}
+	if cfg.Outbox.LockTTL.Duration != 5*time.Minute || cfg.Outbox.MaxRetries != 5 {
+		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
+	}
 }
 
 func TestLoadBytesOverridesDefaults(t *testing.T) {
@@ -76,6 +82,12 @@ game:
   request_queue_capacity: 2048
   request_role_queue_capacity: 64
   request_timeout: 5s
+  global_mail_poll_interval: 45s
+outbox:
+  flush_interval: 2s
+  fetch_limit: 50
+  lock_ttl: 30s
+  max_retries: 3
 `))
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
@@ -133,6 +145,12 @@ game:
 	}
 	if cfg.Game.RequestTimeout.Duration != 5*time.Second {
 		t.Fatalf("unexpected request timeout: %s", cfg.Game.RequestTimeout.Duration)
+	}
+	if cfg.Game.GlobalMailPollInterval.Duration != 45*time.Second {
+		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	}
+	if cfg.Outbox.FlushInterval.Duration != 2*time.Second || cfg.Outbox.FetchLimit != 50 || cfg.Outbox.LockTTL.Duration != 30*time.Second || cfg.Outbox.MaxRetries != 3 {
+		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
 	}
 }
 

@@ -114,4 +114,60 @@ func TestOutboxRelayPublishesPendingEvents(t *testing.T) {
 	if _, ok := cache.mails[10]; !ok {
 		t.Fatal("expected relay to write mail projection")
 	}
+	if len(cache.activeIDs) != 1 || cache.activeIDs[0] != 10 {
+		t.Fatalf("expected relay to update active index, got %#v", cache.activeIDs)
+	}
+}
+
+func TestOutboxRelayMarksMissingMailFailedWithMaxRetries(t *testing.T) {
+	payload := []byte(`{"event_id":1,"global_mail_id":10,"version":2,"action":"publish","timestamp":"2026-05-24T00:00:00Z"}`)
+	outbox := &fakeOutboxRepo{
+		pending: []OutboxEvent{{ID: 1, AggregateID: 10, Version: 2, Payload: payload}},
+	}
+	relay := NewOutboxRelay(
+		outbox,
+		&fakeMailRepo{},
+		&fakeCacheRepo{},
+		&fakePublisher{},
+		WithOutboxRelayMaxRetries(3),
+	)
+
+	count, err := relay.Flush(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no published events, got %d", count)
+	}
+	if len(outbox.failed) != 1 || outbox.failed[0] != 1 {
+		t.Fatalf("expected failed event 1, got %#v", outbox.failed)
+	}
+	if len(outbox.failRetries) != 1 || outbox.failRetries[0] != 3 {
+		t.Fatalf("expected max retries 3, got %#v", outbox.failRetries)
+	}
+	if len(outbox.failReasons) != 1 || outbox.failReasons[0] == "" {
+		t.Fatalf("expected failure reason, got %#v", outbox.failReasons)
+	}
+}
+
+func TestOutboxRelayClaimsEventsWithWorkerID(t *testing.T) {
+	payload := []byte(`{"event_id":1,"global_mail_id":10,"version":2,"action":"publish","timestamp":"2026-05-24T00:00:00Z"}`)
+	outbox := &fakeOutboxRepo{
+		pending: []OutboxEvent{{ID: 1, AggregateID: 10, Version: 2, Payload: payload}},
+	}
+	relay := NewOutboxRelay(
+		outbox,
+		&fakeMailRepo{},
+		&fakeCacheRepo{},
+		&fakePublisher{},
+		WithOutboxRelayWorkerID("relay-a"),
+	)
+
+	_, _ = relay.Flush(context.Background(), 100)
+	if outbox.lockedBy != "relay-a" {
+		t.Fatalf("expected worker id relay-a, got %q", outbox.lockedBy)
+	}
+	if outbox.lockedUntil.IsZero() {
+		t.Fatal("expected lock expiration to be set")
+	}
 }

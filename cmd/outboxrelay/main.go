@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"log"
-	"time"
 
 	"globalmail/app/bootstrap"
 	"globalmail/app/outboxrelay"
@@ -16,8 +15,8 @@ import (
 
 func main() {
 	configPath := bootstrap.ConfigPathFlag("")
-	interval := flag.Duration("interval", time.Second, "outbox flush interval")
-	limit := flag.Int("limit", 100, "max events per flush")
+	interval := flag.Duration("interval", 0, "outbox flush interval")
+	limit := flag.Int("limit", 0, "max events per flush")
 	flag.Parse()
 
 	cfg, err := bootstrap.LoadConfig(*configPath)
@@ -42,8 +41,24 @@ func main() {
 	publisher := kafka.NewGlobalMailPublisher(cfg.Kafka)
 	defer publisher.Close()
 
-	relay := globalmail.NewOutboxRelay(repo, repo, cacheRepo, publisher)
-	worker := outboxrelay.NewWorker(relay, *limit, *interval, log.Default())
+	relay := globalmail.NewOutboxRelay(
+		repo,
+		repo,
+		cacheRepo,
+		publisher,
+		globalmail.WithOutboxRelayWorkerID(cfg.Service.InstanceID),
+		globalmail.WithOutboxRelayLockTTL(cfg.Outbox.LockTTL.Duration),
+		globalmail.WithOutboxRelayMaxRetries(cfg.Outbox.MaxRetries),
+	)
+	flushInterval := cfg.Outbox.FlushInterval.Duration
+	if *interval > 0 {
+		flushInterval = *interval
+	}
+	fetchLimit := cfg.Outbox.FetchLimit
+	if *limit > 0 {
+		fetchLimit = *limit
+	}
+	worker := outboxrelay.NewWorker(relay, fetchLimit, flushInterval, log.Default())
 
 	ctx, stop := bootstrap.SignalContext(context.Background())
 	defer stop()

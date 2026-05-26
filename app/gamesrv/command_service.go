@@ -2,17 +2,23 @@ package gamesrv
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sort"
+	"sync"
 
 	"globalmail/api/rpc"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 var ErrCommandAlreadyRegistered = errors.New("command already registered")
 
 type CommandHandler func(ctx context.Context, req *rpc.CommandRequest) (*anypb.Any, error)
+
+var ErrCommandIdempotencyConflict = errors.New("command idempotency key reused with different payload")
 
 type CommandRegistration struct {
 	Definition *rpc.CommandDefinition
@@ -76,6 +82,75 @@ func (r *CommandRegistry) Definitions() []*rpc.CommandDefinition {
 		return definitions[i].GetCommandId() < definitions[j].GetCommandId()
 	})
 	return definitions
+}
+
+type IdempotentCommandDispatcher struct {
+	next    CommandDispatcher
+	records map[string]commandIdempotencyRecord
+	mu      sync.Mutex
+}
+
+type commandIdempotencyRecord struct {
+	hash     string
+	response *rpc.CommandResponse
+}
+
+func NewIdempotentCommandDispatcher(next CommandDispatcher) *IdempotentCommandDispatcher {
+	return &IdempotentCommandDispatcher{
+		next:    next,
+		records: make(map[string]commandIdempotencyRecord),
+	}
+}
+
+func (d *IdempotentCommandDispatcher) Dispatch(ctx context.Context, req *rpc.CommandRequest) (*rpc.CommandResponse, error) {
+	if req.GetUid() == 0 || req.GetSeq() == 0 {
+		return d.next.Dispatch(ctx, req)
+	}
+	key := commandIdempotencyKey(req)
+	hash, err := commandRequestHash(req)
+	if err != nil {
+		return nil, err
+	}
+
+	d.mu.Lock()
+	if record, ok := d.records[key]; ok {
+		d.mu.Unlock()
+		if record.hash != hash {
+			return &rpc.CommandResponse{
+				CommandId: req.GetCommandId(),
+				Seq:       req.GetSeq(),
+				Code:      409,
+				Message:   ErrCommandIdempotencyConflict.Error(),
+			}, nil
+		}
+		return proto.Clone(record.response).(*rpc.CommandResponse), nil
+	}
+	d.mu.Unlock()
+
+	resp, err := d.next.Dispatch(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.records[key] = commandIdempotencyRecord{
+		hash:     hash,
+		response: proto.Clone(resp).(*rpc.CommandResponse),
+	}
+	d.mu.Unlock()
+	return resp, nil
+}
+
+func commandIdempotencyKey(req *rpc.CommandRequest) string {
+	return fmt.Sprintf("%d:%d:%d", req.GetUid(), req.GetCommandId(), req.GetSeq())
+}
+
+func commandRequestHash(req *rpc.CommandRequest) (string, error) {
+	payload, err := proto.Marshal(req.GetPayload())
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:]), nil
 }
 
 type CommandRPCServer struct {

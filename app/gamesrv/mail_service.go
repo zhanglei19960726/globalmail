@@ -3,6 +3,7 @@ package gamesrv
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -19,17 +20,26 @@ type MailItem struct {
 }
 
 type MailService struct {
-	repo  globalmail.MailRepository
-	cache *globalmail.LocalCache
-	now   func() time.Time
+	repo    globalmail.MailRepository
+	rewards globalmail.RewardRepository
+	cache   *globalmail.LocalCache
+	now     func() time.Time
 }
 
 func NewMailService(repo globalmail.MailRepository, cache *globalmail.LocalCache) *MailService {
-	return &MailService{
+	service := &MailService{
 		repo:  repo,
 		cache: cache,
 		now:   time.Now,
 	}
+	if rewards, ok := repo.(globalmail.RewardRepository); ok {
+		service.rewards = rewards
+	}
+	return service
+}
+
+func (s *MailService) SetRewardRepository(rewards globalmail.RewardRepository) {
+	s.rewards = rewards
 }
 
 func (s *MailService) RefreshCache(ctx context.Context) error {
@@ -86,22 +96,27 @@ func (s *MailService) ListGlobalMails(ctx context.Context, profile globalmail.Us
 }
 
 func (s *MailService) MarkGlobalMailRead(ctx context.Context, profile globalmail.UserProfile, mailID int64) (globalmail.UserGlobalMailState, error) {
-	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) globalmail.UserGlobalMailState {
+	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) (globalmail.UserGlobalMailState, error) {
 		if state.Status == globalmail.UserMailStatusDeleted {
-			return state
+			return state, nil
 		}
 		if state.Status == "" || state.Status == globalmail.UserMailStatusUnread {
 			state.Status = globalmail.UserMailStatusRead
 		}
 		state.UpdateTime = now
-		return state
+		return state, nil
 	})
 }
 
 func (s *MailService) ClaimGlobalMail(ctx context.Context, profile globalmail.UserProfile, mailID int64, lootIndexes []int) (globalmail.UserGlobalMailState, error) {
-	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) globalmail.UserGlobalMailState {
+	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) (globalmail.UserGlobalMailState, error) {
 		if state.Status == globalmail.UserMailStatusDeleted {
-			return state
+			return state, nil
+		}
+		for _, lootIndex := range newLootIndexes(state.ClaimedLootIndexes, lootIndexes) {
+			if err := s.grantReward(ctx, profile, mailID, lootIndex, now); err != nil {
+				return globalmail.UserGlobalMailState{}, err
+			}
 		}
 		state.Status = globalmail.UserMailStatusClaimed
 		state.ClaimedLootIndexes = mergeLootIndexes(state.ClaimedLootIndexes, lootIndexes)
@@ -110,23 +125,23 @@ func (s *MailService) ClaimGlobalMail(ctx context.Context, profile globalmail.Us
 			state.ClaimTime = &claimTime
 		}
 		state.UpdateTime = now
-		return state
+		return state, nil
 	})
 }
 
 func (s *MailService) DeleteGlobalMail(ctx context.Context, profile globalmail.UserProfile, mailID int64) (globalmail.UserGlobalMailState, error) {
-	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) globalmail.UserGlobalMailState {
+	return s.updateGlobalMailState(ctx, profile, mailID, func(state globalmail.UserGlobalMailState, now time.Time) (globalmail.UserGlobalMailState, error) {
 		state.Status = globalmail.UserMailStatusDeleted
 		if state.DeleteTime == nil {
 			deleteTime := now
 			state.DeleteTime = &deleteTime
 		}
 		state.UpdateTime = now
-		return state
+		return state, nil
 	})
 }
 
-func (s *MailService) updateGlobalMailState(ctx context.Context, profile globalmail.UserProfile, mailID int64, apply func(globalmail.UserGlobalMailState, time.Time) globalmail.UserGlobalMailState) (globalmail.UserGlobalMailState, error) {
+func (s *MailService) updateGlobalMailState(ctx context.Context, profile globalmail.UserProfile, mailID int64, apply func(globalmail.UserGlobalMailState, time.Time) (globalmail.UserGlobalMailState, error)) (globalmail.UserGlobalMailState, error) {
 	if err := s.cache.RefreshIfStale(ctx); err != nil {
 		return globalmail.UserGlobalMailState{}, err
 	}
@@ -152,7 +167,10 @@ func (s *MailService) updateGlobalMailState(ctx context.Context, profile globalm
 		}
 	}
 	state.Version++
-	state = apply(state, now)
+	state, err = apply(state, now)
+	if err != nil {
+		return globalmail.UserGlobalMailState{}, err
+	}
 	if state.UpdateTime.IsZero() {
 		state.UpdateTime = now
 	}
@@ -160,6 +178,21 @@ func (s *MailService) updateGlobalMailState(ctx context.Context, profile globalm
 		return globalmail.UserGlobalMailState{}, err
 	}
 	return state, nil
+}
+
+func (s *MailService) grantReward(ctx context.Context, profile globalmail.UserProfile, mailID int64, lootIndex int, now time.Time) error {
+	if s.rewards == nil {
+		return nil
+	}
+	_, err := s.rewards.GrantGlobalMailReward(ctx, globalmail.RewardGrant{
+		RoleID:       profile.RoleID,
+		ServerID:     profile.ServerID,
+		GlobalMailID: mailID,
+		LootIndex:    lootIndex,
+		GrantKey:     fmt.Sprintf("%d:%d:%d", profile.RoleID, mailID, lootIndex),
+		CreateTime:   now,
+	})
+	return err
 }
 
 func (s *MailService) isMailVisible(ctx context.Context, profile globalmail.UserProfile, mailID int64) (bool, error) {
@@ -187,4 +220,21 @@ func mergeLootIndexes(existing, next []int) []int {
 	}
 	sort.Ints(merged)
 	return merged
+}
+
+func newLootIndexes(existing, next []int) []int {
+	seen := make(map[int]struct{}, len(existing))
+	for _, idx := range existing {
+		seen[idx] = struct{}{}
+	}
+	var out []int
+	for _, idx := range next {
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	return out
 }

@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"globalmail/domain/globalmail"
@@ -23,6 +24,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&GlobalMailConditionModel{},
 		&UserPersonalMailModel{},
 		&UserGlobalMailStateModel{},
+		&UserGlobalMailRewardLedgerModel{},
 		&UserMailCursorModel{},
 		&GlobalMailOutboxEventModel{},
 		&GlobalMailIdempotencyModel{},
@@ -140,41 +142,102 @@ func (r *Repository) GetUserStates(ctx context.Context, roleID int64, mailIDs []
 
 func (r *Repository) SaveUserState(ctx context.Context, state globalmail.UserGlobalMailState) error {
 	model := toStateModel(state)
+	preserveDeleted := func(column string, value interface{}) clause.Expr {
+		return clause.Expr{
+			SQL:  "CASE WHEN status = ? THEN " + column + " ELSE ? END",
+			Vars: []interface{}{string(globalmail.UserMailStatusDeleted), value},
+		}
+	}
 	return r.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{
 				{Name: "role_id"},
 				{Name: "global_mail_id"},
 			},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"server_id",
-				"status",
-				"claimed_loot_indexes",
-				"claim_time",
-				"delete_time",
-				"version",
-				"update_time",
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"server_id":            preserveDeleted("server_id", model.ServerID),
+				"status":               preserveDeleted("status", model.Status),
+				"claimed_loot_indexes": preserveDeleted("claimed_loot_indexes", model.ClaimedLootIndexes),
+				"claim_time":           preserveDeleted("claim_time", model.ClaimTime),
+				"delete_time":          preserveDeleted("delete_time", model.DeleteTime),
+				"version":              preserveDeleted("version", model.Version),
+				"update_time":          preserveDeleted("update_time", model.UpdateTime),
 			}),
 		}).
 		Create(&model).Error
 }
 
-func (r *Repository) FetchPending(ctx context.Context, limit int) ([]globalmail.OutboxEvent, error) {
+func (r *Repository) GrantGlobalMailReward(ctx context.Context, grant globalmail.RewardGrant) (bool, error) {
+	model := UserGlobalMailRewardLedgerModel{
+		GrantKey:     grant.GrantKey,
+		RoleID:       grant.RoleID,
+		ServerID:     grant.ServerID,
+		GlobalMailID: grant.GlobalMailID,
+		LootIndex:    grant.LootIndex,
+		CreateTime:   grant.CreateTime,
+	}
+	result := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&model)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func (r *Repository) FetchPending(ctx context.Context, limit int, lockedBy string, lockedUntil time.Time) ([]globalmail.OutboxEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	now := time.Now().UTC()
-	var models []GlobalMailOutboxEventModel
-	if err := r.db.WithContext(ctx).
-		Where("status = ? AND (next_retry_time IS NULL OR next_retry_time <= ?)", globalmail.OutboxStatusPending, now).
-		Order("event_id ASC").
-		Limit(limit).
-		Find(&models).Error; err != nil {
-		return nil, err
+	if lockedBy == "" {
+		lockedBy = "outbox-relay"
 	}
-	events := make([]globalmail.OutboxEvent, 0, len(models))
-	for _, model := range models {
-		events = append(events, toOutboxEvent(model))
+
+	var events []globalmail.OutboxEvent
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var models []GlobalMailOutboxEventModel
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where(
+				"(status = ? AND (next_retry_time IS NULL OR next_retry_time <= ?)) OR (status = ? AND locked_until <= ?)",
+				globalmail.OutboxStatusPending,
+				now,
+				globalmail.OutboxStatusProcessing,
+				now,
+			).
+			Order("event_id ASC").
+			Limit(limit).
+			Find(&models).Error; err != nil {
+			return err
+		}
+		if len(models) == 0 {
+			return nil
+		}
+
+		ids := make([]int64, 0, len(models))
+		events = make([]globalmail.OutboxEvent, 0, len(models))
+		for _, model := range models {
+			ids = append(ids, model.EventID)
+			event := toOutboxEvent(model)
+			event.Status = globalmail.OutboxStatusProcessing
+			event.LockedBy = lockedBy
+			event.LockedUntil = &lockedUntil
+			events = append(events, event)
+		}
+
+		return tx.Model(&GlobalMailOutboxEventModel{}).
+			Where("event_id IN ?", ids).
+			Updates(map[string]interface{}{
+				"status":          string(globalmail.OutboxStatusProcessing),
+				"locked_by":       lockedBy,
+				"locked_until":    lockedUntil,
+				"next_retry_time": nil,
+				"update_time":     now,
+			}).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -185,20 +248,54 @@ func (r *Repository) MarkPublished(ctx context.Context, eventID int64, published
 		Where("event_id = ?", eventID).
 		Updates(map[string]interface{}{
 			"status":         string(globalmail.OutboxStatusPublished),
+			"locked_by":      "",
+			"locked_until":   nil,
+			"failure_reason": "",
 			"published_time": publishedAt,
 			"update_time":    publishedAt,
 		}).Error
 }
 
-func (r *Repository) MarkFailed(ctx context.Context, eventID int64, nextRetryAt time.Time, _ error) error {
+func (r *Repository) MarkFailed(ctx context.Context, eventID int64, nextRetryAt time.Time, cause error, maxRetries int) error {
 	now := time.Now().UTC()
+	status := string(globalmail.OutboxStatusPending)
+	if maxRetries <= 0 {
+		maxRetries = 5
+	}
+	var model GlobalMailOutboxEventModel
+	if err := r.db.WithContext(ctx).
+		Select("retry_count").
+		Where("event_id = ?", eventID).
+		First(&model).Error; err != nil {
+		return err
+	}
+	if model.RetryCount+1 >= maxRetries {
+		status = string(globalmail.OutboxStatusFailed)
+	}
+	reason := ""
+	if cause != nil {
+		reason = cause.Error()
+	}
+	if len(reason) > 1024 {
+		reason = reason[:1024]
+	}
+	reason = strings.TrimSpace(reason)
+
+	updates := map[string]interface{}{
+		"status":         status,
+		"retry_count":    gorm.Expr("retry_count + 1"),
+		"locked_by":      "",
+		"locked_until":   nil,
+		"failure_reason": reason,
+		"update_time":    now,
+	}
+	if status == string(globalmail.OutboxStatusPending) {
+		updates["next_retry_time"] = nextRetryAt
+	} else {
+		updates["next_retry_time"] = nil
+	}
 	return r.db.WithContext(ctx).
 		Model(&GlobalMailOutboxEventModel{}).
 		Where("event_id = ?", eventID).
-		Updates(map[string]interface{}{
-			"status":          string(globalmail.OutboxStatusPending),
-			"retry_count":     gorm.Expr("retry_count + 1"),
-			"next_retry_time": nextRetryAt,
-			"update_time":     now,
-		}).Error
+		Updates(updates).Error
 }

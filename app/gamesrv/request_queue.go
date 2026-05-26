@@ -39,7 +39,7 @@ type commandJob struct {
 	ctx         context.Context
 	req         *rpc.CommandRequest
 	result      chan commandResult
-	releaseOnce sync.Once
+	releaseOnce *sync.Once
 	release     func()
 }
 
@@ -86,9 +86,10 @@ func (q *CommandRequestQueue) Dispatch(ctx context.Context, req *rpc.CommandRequ
 
 	result := make(chan commandResult, 1)
 	job := commandJob{
-		ctx:    dispatchCtx,
-		req:    req,
-		result: result,
+		ctx:         dispatchCtx,
+		req:         req,
+		result:      result,
+		releaseOnce: &sync.Once{},
 		release: func() {
 			<-q.capacity
 		},
@@ -120,8 +121,10 @@ func (q *CommandRequestQueue) Dispatch(ctx context.Context, req *rpc.CommandRequ
 
 	select {
 	case <-dispatchCtx.Done():
+		job.releaseCapacity()
 		return q.contextDoneResponse(ctx, dispatchCtx, req)
 	case <-q.done:
+		job.releaseCapacity()
 		return nil, ErrCommandQueueClosed
 	case res := <-result:
 		if errors.Is(res.err, context.DeadlineExceeded) {
@@ -205,15 +208,20 @@ func (q *CommandRequestQueue) handle(job commandJob) {
 		job.result <- commandResult{err: err}
 		return
 	}
-	defer q.releaseWorker()
+	var releaseWorker sync.Once
+	release := func() {
+		releaseWorker.Do(q.releaseWorker)
+	}
 
 	result := make(chan commandResult, 1)
 	go func() {
+		defer release()
 		resp, err := q.dispatcher.Dispatch(job.ctx, job.req)
 		result <- commandResult{resp: resp, err: err}
 	}()
 	select {
 	case <-job.ctx.Done():
+		release()
 		job.result <- commandResult{err: job.ctx.Err()}
 	case res := <-result:
 		job.result <- res

@@ -27,9 +27,10 @@ const (
 type OutboxStatus string
 
 const (
-	OutboxStatusPending   OutboxStatus = "pending"
-	OutboxStatusPublished OutboxStatus = "published"
-	OutboxStatusFailed    OutboxStatus = "failed"
+	OutboxStatusPending    OutboxStatus = "pending"
+	OutboxStatusProcessing OutboxStatus = "processing"
+	OutboxStatusPublished  OutboxStatus = "published"
+	OutboxStatusFailed     OutboxStatus = "failed"
 )
 
 type IdempotencyStatus string
@@ -93,6 +94,15 @@ type UserGlobalMailState struct {
 	UpdateTime         time.Time      `json:"update_time"`
 }
 
+type RewardGrant struct {
+	RoleID       int64     `json:"role_id"`
+	ServerID     int       `json:"server_id"`
+	GlobalMailID int64     `json:"global_mail_id"`
+	LootIndex    int       `json:"loot_index"`
+	GrantKey     string    `json:"grant_key"`
+	CreateTime   time.Time `json:"create_time"`
+}
+
 type PersonalMail struct {
 	ID         int64           `json:"mail_id"`
 	RoleID     int64           `json:"role_id"`
@@ -117,6 +127,9 @@ type OutboxEvent struct {
 	Status        OutboxStatus    `json:"status"`
 	RetryCount    int             `json:"retry_count"`
 	NextRetryTime *time.Time      `json:"next_retry_time,omitempty"`
+	LockedBy      string          `json:"locked_by,omitempty"`
+	LockedUntil   *time.Time      `json:"locked_until,omitempty"`
+	FailureReason string          `json:"failure_reason,omitempty"`
 	PublishedTime *time.Time      `json:"published_time,omitempty"`
 	CreateTime    time.Time       `json:"create_time"`
 	UpdateTime    time.Time       `json:"update_time"`

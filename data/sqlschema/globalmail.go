@@ -71,6 +71,17 @@ CREATE TABLE IF NOT EXISTS user_global_mail_state (
     KEY idx_global_mail_id (global_mail_id)
 ) COMMENT='玩家全局邮件状态表';
 
+CREATE TABLE IF NOT EXISTS user_global_mail_reward_ledger (
+    grant_key      VARCHAR(160) NOT NULL COMMENT '发奖幂等流水',
+    role_id        BIGINT       NOT NULL COMMENT '角色ID',
+    server_id      INT          NOT NULL COMMENT '区服ID',
+    global_mail_id BIGINT       NOT NULL COMMENT '全局邮件ID',
+    loot_index     INT          NOT NULL COMMENT '奖励下标',
+    create_time    DATETIME     NOT NULL,
+    PRIMARY KEY (grant_key),
+    KEY idx_role_mail (role_id, global_mail_id)
+) COMMENT='全局邮件奖励发放幂等流水表';
+
 CREATE TABLE IF NOT EXISTS user_mail_cursor (
     role_id                    BIGINT   NOT NULL COMMENT '角色ID',
     server_id                  INT      NOT NULL COMMENT '区服ID',
@@ -87,14 +98,17 @@ CREATE TABLE IF NOT EXISTS global_mail_outbox_event (
     aggregate_id       BIGINT      NOT NULL COMMENT 'global_mail_id',
     version            BIGINT      NOT NULL COMMENT '全局邮件版本',
     payload            JSON        NOT NULL COMMENT '事件小payload',
-    status             VARCHAR(32) NOT NULL COMMENT 'pending/published/failed',
+    status             VARCHAR(32) NOT NULL COMMENT 'pending/processing/published/failed',
     retry_count        INT         NOT NULL DEFAULT 0,
     next_retry_time    DATETIME    NULL,
+    locked_by          VARCHAR(128) NULL,
+    locked_until       DATETIME    NULL,
+    failure_reason     VARCHAR(1024) NULL,
     published_time     DATETIME    NULL,
     create_time        DATETIME    NOT NULL,
     update_time        DATETIME    NOT NULL,
     PRIMARY KEY (event_id),
-    KEY idx_status_retry (status, next_retry_time),
+    KEY idx_status_retry (status, next_retry_time, locked_until),
     KEY idx_aggregate_version (aggregate_id, version)
 ) COMMENT='全局邮件事件Outbox表';
 

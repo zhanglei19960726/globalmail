@@ -37,6 +37,7 @@ type Config struct {
 	Gate    GateConfig    `yaml:"gate"`
 	Acc     AccConfig     `yaml:"acc"`
 	Game    GameConfig    `yaml:"game"`
+	Outbox  OutboxConfig  `yaml:"outbox"`
 }
 
 type ServiceConfig struct {
@@ -99,6 +100,14 @@ type GameConfig struct {
 	RequestQueueCapacity     int      `yaml:"request_queue_capacity"`
 	RequestRoleQueueCapacity int      `yaml:"request_role_queue_capacity"`
 	RequestTimeout           Duration `yaml:"request_timeout"`
+	GlobalMailPollInterval   Duration `yaml:"global_mail_poll_interval"`
+}
+
+type OutboxConfig struct {
+	FlushInterval Duration `yaml:"flush_interval"`
+	FetchLimit    int      `yaml:"fetch_limit"`
+	LockTTL       Duration `yaml:"lock_ttl"`
+	MaxRetries    int      `yaml:"max_retries"`
 }
 
 func Default() Config {
@@ -148,6 +157,13 @@ func Default() Config {
 			RequestQueueCapacity:     1024,
 			RequestRoleQueueCapacity: 32,
 			RequestTimeout:           Duration{Duration: 3 * time.Second},
+			GlobalMailPollInterval:   Duration{Duration: 30 * time.Second},
+		},
+		Outbox: OutboxConfig{
+			FlushInterval: Duration{Duration: time.Second},
+			FetchLimit:    100,
+			LockTTL:       Duration{Duration: 5 * time.Minute},
+			MaxRetries:    5,
 		},
 	}
 }
@@ -222,6 +238,21 @@ func (c Config) Validate() error {
 	}
 	if c.Game.RequestTimeout.Duration <= 0 {
 		return errors.New("game request timeout must be positive")
+	}
+	if c.Game.GlobalMailPollInterval.Duration <= 0 {
+		return errors.New("game global mail poll interval must be positive")
+	}
+	if c.Outbox.FlushInterval.Duration <= 0 {
+		return errors.New("outbox flush interval must be positive")
+	}
+	if c.Outbox.FetchLimit <= 0 {
+		return errors.New("outbox fetch limit must be positive")
+	}
+	if c.Outbox.LockTTL.Duration <= 0 {
+		return errors.New("outbox lock ttl must be positive")
+	}
+	if c.Outbox.MaxRetries <= 0 {
+		return errors.New("outbox max retries must be positive")
 	}
 	return nil
 }

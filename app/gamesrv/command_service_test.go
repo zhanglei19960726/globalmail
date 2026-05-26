@@ -7,6 +7,7 @@ import (
 	"globalmail/api/rpc"
 
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestCommandRegistryDispatchUnknownCommand(t *testing.T) {
@@ -43,5 +44,68 @@ func TestCommandRegistryListCommandsSorted(t *testing.T) {
 	}
 	if definitions[0].GetCommandId() != rpc.CommandID_COMMAND_ID_MAIL_LIST_GLOBAL {
 		t.Fatalf("expected sorted command definitions, got %+v", definitions)
+	}
+}
+
+func TestIdempotentCommandDispatcherReplaysResponse(t *testing.T) {
+	registry := NewCommandRegistry()
+	calls := 0
+	if err := registry.Register(commandDefinition(rpc.CommandID_COMMAND_ID_MAIL_CLAIM, "mail.claim", "req", "resp"), func(context.Context, *rpc.CommandRequest) (*anypb.Any, error) {
+		calls++
+		return anypb.New(wrapperspb.String("claimed"))
+	}); err != nil {
+		t.Fatalf("register claim failed: %v", err)
+	}
+	dispatcher := NewIdempotentCommandDispatcher(registry)
+	payload, _ := anypb.New(wrapperspb.String("same"))
+	req := &rpc.CommandRequest{
+		CommandId: rpc.CommandID_COMMAND_ID_MAIL_CLAIM,
+		Uid:       10001,
+		Seq:       7,
+		Payload:   payload,
+	}
+
+	first, err := dispatcher.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
+	}
+	second, err := dispatcher.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second dispatch failed: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected handler to be called once, got %d", calls)
+	}
+	if first.GetCode() != 0 || second.GetCode() != 0 || second.GetPayload() == nil {
+		t.Fatalf("unexpected responses: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestIdempotentCommandDispatcherRejectsConflictingPayload(t *testing.T) {
+	registry := NewCommandRegistry()
+	if err := registry.Register(commandDefinition(rpc.CommandID_COMMAND_ID_MAIL_CLAIM, "mail.claim", "req", "resp"), func(context.Context, *rpc.CommandRequest) (*anypb.Any, error) {
+		return anypb.New(wrapperspb.String("claimed"))
+	}); err != nil {
+		t.Fatalf("register claim failed: %v", err)
+	}
+	dispatcher := NewIdempotentCommandDispatcher(registry)
+	firstPayload, _ := anypb.New(wrapperspb.String("one"))
+	secondPayload, _ := anypb.New(wrapperspb.String("two"))
+	req := &rpc.CommandRequest{
+		CommandId: rpc.CommandID_COMMAND_ID_MAIL_CLAIM,
+		Uid:       10001,
+		Seq:       7,
+		Payload:   firstPayload,
+	}
+	if _, err := dispatcher.Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
+	}
+	req.Payload = secondPayload
+	resp, err := dispatcher.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second dispatch failed: %v", err)
+	}
+	if resp.GetCode() != 409 {
+		t.Fatalf("expected conflict response, got %+v", resp)
 	}
 }
