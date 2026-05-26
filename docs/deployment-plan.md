@@ -212,9 +212,10 @@ gmsrv/mgrsrv:
     MySQL 事务写业务数据和 GlobalMailOutboxEvent
 
 Outbox Relay:
-    扫描 pending outbox
+    抢占 pending outbox
+    幂等写 Redis 投影并推进 GlobalMailVersion
     投递 Kafka
-    成功后标记 published
+    Redis 和 Kafka 都成功后标记 published
     失败后保留 pending 并按退避策略重试
 
 gamesrv:
@@ -233,6 +234,7 @@ gamesrv:
 
 - 事件 payload 只放 ID、version、action 等小字段，不放完整邮件内容。
 - 消费端必须按 version 幂等处理重复和乱序事件。
+- Outbox Relay、Redis 投影、Kafka 消费和玩家领取的幂等规则见 `data-consistency-idempotency.md`。
 - Kafka 延迟或故障时，Outbox Relay 重试，`gamesrv` 定时检查 `GlobalMailVersion` 兜底。
 - Kafka 适合作为跨服务事件总线，但不能替代 MySQL 权威数据和 Redis 缓存版本。
 
@@ -528,7 +530,9 @@ InstanceUnhealthyThreshold
 - etcd watch 断开次数、lease 续租失败率、服务列表变更延迟。
 - recovery-controller 自动摘除次数、自动清理路由次数、动作失败率。
 - Kafka 生产失败率、消费延迟、consumer lag、topic 积压。
-- Outbox Relay pending 数量、投递失败率、最大滞留时间。
+- Outbox Relay pending/processing/failed 数量、投递失败率、重试次数、最大滞留时间。
+- Redis 全局邮件投影写入失败率、`GlobalMailVersion` 推进失败率、`gamesrv` 本地版本落后量。
+- 发布幂等命中次数、幂等冲突次数、领取重复发奖拦截次数、请求重试命中次数。
 - Redis/MySQL 请求耗时、错误率和连接池使用率。
 
 关键告警：
@@ -539,5 +543,7 @@ InstanceUnhealthyThreshold
 - etcd lease 续租失败或 watch 大面积断开。
 - recovery-controller 动作失败或短时间重复摘除同类实例。
 - Kafka 投递失败、consumer lag 持续升高或 outbox 长时间积压。
+- outbox `failed` 持续增加，或最大滞留时间超过业务可接受窗口。
+- 多台 `gamesrv` 本地版本长期落后于 Redis `GlobalMailVersion`。
 - Redis/MySQL 延迟升高或错误率升高。
 - `gatesrv` 单实例连接数超过上限。

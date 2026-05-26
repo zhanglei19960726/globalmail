@@ -1,6 +1,6 @@
 # 需求设计方案
 
-> 文档定位：描述全局邮件业务本身，包括数据模型、缓存结构、事件通知、条件过滤、请求路径和风险点。服务架构见 `server-architecture.md`，运行时链路见 `runtime-flows.md`。
+> 文档定位：描述全局邮件业务本身，包括数据模型、缓存结构、事件通知、条件过滤、请求路径和风险点。服务架构见 `server-architecture.md`，运行时链路见 `runtime-flows.md`，数据一致性和幂等性基准见 `data-consistency-idempotency.md`。
 
 ## 快速摘要
 
@@ -11,7 +11,7 @@
 | 权威存储 | MySQL 保存邮件、条件、玩家状态和 outbox |
 | 缓存 | `gamesrv` 本地缓存 + Redis + MySQL 三级缓存 |
 | 通知 | MySQL Outbox + Kafka 广播变更事件 |
-| 幂等 | 读取、领取、删除状态写入必须支持重复请求 |
+| 幂等 | 发布、Outbox、缓存投影、消费、领取和请求重试都必须支持重复执行，详细规则见 `data-consistency-idempotency.md` |
 
 ## 1. 需求背景
 
@@ -531,6 +531,8 @@ VisibleGlobalMailIds:{RoleID}:{GlobalMailVersion}
 ## 7. Kafka 事件通知
 
 Kafka 用作业务事件总线，只负责通知“版本发生变化”，不存放全局邮件完整内容，也不是权威状态。
+
+全局邮件发布、Outbox Relay、Redis 投影、Kafka 消费、本地缓存刷新和玩家领取的完整一致性与幂等规则统一维护在 `data-consistency-idempotency.md`。本节只保留业务事件结构和读写链路摘要，避免两份文档重复定义同一套状态机。
 
 推荐 topic：
 
