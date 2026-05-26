@@ -51,6 +51,7 @@ func main() {
 	mysqlRepo := mysql.NewRepository(db)
 	cacheRepo := redisdata.NewRepository(redisClient, cfg.Redis.KeyPrefix)
 	localCache := globalmail.NewLocalCache(mysqlRepo, cacheRepo)
+	localCache.SetRebuildLockOptions(cfg.Game.GlobalMailRebuildLockTTL.Duration, cfg.Game.GlobalMailRebuildWait.Duration)
 	mailService := gamesrv.NewMailService(mysqlRepo, localCache)
 
 	if err := mailService.ForceRefreshCache(ctx); err != nil {
@@ -69,7 +70,7 @@ func main() {
 	if err := gamesrv.RegisterMailCommandHandlers(commandRegistry, mailRPCServer); err != nil {
 		log.Fatalf("register mail commands: %v", err)
 	}
-	idempotentDispatcher := gamesrv.NewIdempotentCommandDispatcher(commandRegistry)
+	idempotentDispatcher := gamesrv.NewIdempotentCommandDispatcherWithStore(commandRegistry, cacheRepo, cfg.Game.CommandIdempotencyTTL.Duration)
 	commandQueue := gamesrv.NewCommandRequestQueue(idempotentDispatcher, gamesrv.CommandQueueOptions{
 		Workers:           cfg.Game.RequestQueueWorkers,
 		Capacity:          cfg.Game.RequestQueueCapacity,

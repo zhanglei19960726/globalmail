@@ -278,7 +278,7 @@ MailService.DeleteGlobalMail
     -> MySQL UserGlobalMailState
 ```
 
-领取接口当前完成状态幂等合并，奖励实际发放后续接入独立奖励服务或背包服务时再放到 `ClaimGlobalMail` 的强校验流程内。
+领取接口当前完成状态幂等合并，并通过本模块奖励账本按 `role_id + global_mail_id + loot_index` 拦截重复发奖。后续接入独立奖励服务或背包服务时，应继续传入稳定奖励流水号，并记录外部服务返回状态用于补偿。
 
 命令字分发链路：
 

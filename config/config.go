@@ -100,7 +100,10 @@ type GameConfig struct {
 	RequestQueueCapacity     int      `yaml:"request_queue_capacity"`
 	RequestRoleQueueCapacity int      `yaml:"request_role_queue_capacity"`
 	RequestTimeout           Duration `yaml:"request_timeout"`
+	CommandIdempotencyTTL    Duration `yaml:"command_idempotency_ttl"`
 	GlobalMailPollInterval   Duration `yaml:"global_mail_poll_interval"`
+	GlobalMailRebuildLockTTL Duration `yaml:"global_mail_rebuild_lock_ttl"`
+	GlobalMailRebuildWait    Duration `yaml:"global_mail_rebuild_wait_interval"`
 }
 
 type OutboxConfig struct {
@@ -157,7 +160,10 @@ func Default() Config {
 			RequestQueueCapacity:     1024,
 			RequestRoleQueueCapacity: 32,
 			RequestTimeout:           Duration{Duration: 3 * time.Second},
+			CommandIdempotencyTTL:    Duration{Duration: 10 * time.Minute},
 			GlobalMailPollInterval:   Duration{Duration: 30 * time.Second},
+			GlobalMailRebuildLockTTL: Duration{Duration: 30 * time.Second},
+			GlobalMailRebuildWait:    Duration{Duration: 100 * time.Millisecond},
 		},
 		Outbox: OutboxConfig{
 			FlushInterval: Duration{Duration: time.Second},
@@ -239,8 +245,17 @@ func (c Config) Validate() error {
 	if c.Game.RequestTimeout.Duration <= 0 {
 		return errors.New("game request timeout must be positive")
 	}
+	if c.Game.CommandIdempotencyTTL.Duration <= 0 {
+		return errors.New("game command idempotency ttl must be positive")
+	}
 	if c.Game.GlobalMailPollInterval.Duration <= 0 {
 		return errors.New("game global mail poll interval must be positive")
+	}
+	if c.Game.GlobalMailRebuildLockTTL.Duration <= 0 {
+		return errors.New("game global mail rebuild lock ttl must be positive")
+	}
+	if c.Game.GlobalMailRebuildWait.Duration <= 0 {
+		return errors.New("game global mail rebuild wait interval must be positive")
 	}
 	if c.Outbox.FlushInterval.Duration <= 0 {
 		return errors.New("outbox flush interval must be positive")

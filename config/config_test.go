@@ -39,8 +39,14 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Game.RequestTimeout.Duration != 3*time.Second {
 		t.Fatalf("unexpected game request timeout: %s", cfg.Game.RequestTimeout.Duration)
 	}
+	if cfg.Game.CommandIdempotencyTTL.Duration != 10*time.Minute {
+		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Game.CommandIdempotencyTTL.Duration)
+	}
 	if cfg.Game.GlobalMailPollInterval.Duration != 30*time.Second {
 		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	}
+	if cfg.Game.GlobalMailRebuildLockTTL.Duration != 30*time.Second || cfg.Game.GlobalMailRebuildWait.Duration != 100*time.Millisecond {
+		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Game)
 	}
 	if cfg.Outbox.LockTTL.Duration != 5*time.Minute || cfg.Outbox.MaxRetries != 5 {
 		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
@@ -82,7 +88,10 @@ game:
   request_queue_capacity: 2048
   request_role_queue_capacity: 64
   request_timeout: 5s
+  command_idempotency_ttl: 20m
   global_mail_poll_interval: 45s
+  global_mail_rebuild_lock_ttl: 20s
+  global_mail_rebuild_wait_interval: 200ms
 outbox:
   flush_interval: 2s
   fetch_limit: 50
@@ -146,8 +155,14 @@ outbox:
 	if cfg.Game.RequestTimeout.Duration != 5*time.Second {
 		t.Fatalf("unexpected request timeout: %s", cfg.Game.RequestTimeout.Duration)
 	}
+	if cfg.Game.CommandIdempotencyTTL.Duration != 20*time.Minute {
+		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Game.CommandIdempotencyTTL.Duration)
+	}
 	if cfg.Game.GlobalMailPollInterval.Duration != 45*time.Second {
 		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	}
+	if cfg.Game.GlobalMailRebuildLockTTL.Duration != 20*time.Second || cfg.Game.GlobalMailRebuildWait.Duration != 200*time.Millisecond {
+		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Game)
 	}
 	if cfg.Outbox.FlushInterval.Duration != 2*time.Second || cfg.Outbox.FetchLimit != 50 || cfg.Outbox.LockTTL.Duration != 30*time.Second || cfg.Outbox.MaxRetries != 3 {
 		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)

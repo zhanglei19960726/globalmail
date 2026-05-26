@@ -335,15 +335,14 @@ request_hash
 - Outbox 表具备 `pending`、`processing`、`published`、`failed` 状态，以及抢占锁、最大重试和失败原因。
 - Redis 投影和版本推进按目标版本幂等执行，旧事件不会回退 `GlobalMailVersion`。
 - `gamesrv` 消费事件时按 `event.version` 判旧，并通过定时轮询 `GlobalMailVersion` 兜底刷新。
-- 本地缓存刷新优先走 Redis L2；L2 缺失时回源 MySQL 并重建 Redis 投影，同进程内回源会通过 singleflight 合并。
+- 本地缓存刷新优先走 Redis L2；L2 缺失时先抢 Redis rebuild lock，再回源 MySQL 并重建 Redis 投影，同进程内回源会通过 singleflight 合并。
 - 玩家状态更新已保护删除终态，领取链路接入奖励账本，按 `role_id + global_mail_id + loot_index` 防重复发奖。
-- 写命令已增加请求级幂等缓存，处理同一 `uid + command_id + seq` 的重复请求。
+- 写命令已增加请求级幂等缓存，并通过 Redis 持久化响应摘要，处理同一 `uid + command_id + seq` 的重复请求。
 
 仍在后续演进中的能力：
 
-- 请求级幂等目前是 `gamesrv` 进程内缓存；生产环境如需跨重启回放历史响应，应落到 Redis 或 MySQL。
 - 奖励流水当前是本模块账本；接入真实奖励服务时，需要记录外部奖励服务流水、返回状态和补偿任务。
 - 监控指标已预留轻量埋点接口，仍需要接入 Prometheus、OpenTelemetry 或项目现有监控后端。
-- Redis L2 回源当前支持同进程 singleflight；多实例同时回源时，如压力较大，可继续增加 Redis 分布式 rebuild lock。
+- Redis L2 回源已支持同进程 singleflight 和 Redis 分布式 rebuild lock，锁 TTL 和等待间隔已配置化。
 
 这些改造可以按生产接入程度继续推进，文档中的一致性和幂等规则仍作为后续实现验收标准。

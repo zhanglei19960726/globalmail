@@ -32,6 +32,10 @@ type CacheRepository interface {
 	GetUserProfile(ctx context.Context, roleID int64) (UserProfile, bool, error)
 }
 
+type CacheRebuildLocker interface {
+	TryAcquireGlobalMailRebuildLock(ctx context.Context, version int64, ttl time.Duration) (release func(context.Context) error, acquired bool, err error)
+}
+
 type EventPublisher interface {
 	PublishGlobalMailChanged(ctx context.Context, event GlobalMailChangedEvent) error
 }

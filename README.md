@@ -85,13 +85,15 @@ docs/       架构、流程、部署、需求和请求队列设计文档
 - `gamesrv` 消费 Kafka 时按事件版本忽略重复或乱序事件。
 - `gamesrv` 定时轮询 `GlobalMailVersion`，避免漏收 Kafka 事件后长期不一致。
 - 玩家邮件删除态不会被后续已读或领取覆盖。
+- Outbox 多实例抢占锁、最大重试和永久 `failed` 状态。
+- Redis L2 快照优先刷新、singleflight 和跨实例重建锁。
+- 奖励账本按 `role_id + global_mail_id + loot_index` 拦截重复发奖。
+- 写命令按 `uid + command_id + seq` 做请求级幂等，并通过 Redis 持久化响应摘要。
 
 仍在后续演进中的能力：
 
-- Outbox 多实例抢占锁、最大重试和永久 `failed` 状态。
-- Redis L2 快照优先刷新、singleflight 和跨实例重建锁。
-- 奖励账本或奖励服务的发奖幂等流水。
-- 写命令的请求级幂等记录和超时重放。
+- 接入真实奖励服务或背包服务时，需要记录外部奖励流水和补偿状态。
+- 监控指标已预留接口，仍需接入项目统一监控后端。
 
 ## 配置
 

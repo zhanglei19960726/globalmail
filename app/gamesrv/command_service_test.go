@@ -3,6 +3,7 @@ package gamesrv
 import (
 	"context"
 	"testing"
+	"time"
 
 	"globalmail/api/rpc"
 
@@ -108,4 +109,55 @@ func TestIdempotentCommandDispatcherRejectsConflictingPayload(t *testing.T) {
 	if resp.GetCode() != 409 {
 		t.Fatalf("expected conflict response, got %+v", resp)
 	}
+}
+
+func TestIdempotentCommandDispatcherReplaysStoredResponse(t *testing.T) {
+	store := &fakeCommandIdempotencyStore{records: map[string]commandIdempotencyRecord{}}
+	registry := NewCommandRegistry()
+	calls := 0
+	if err := registry.Register(commandDefinition(rpc.CommandID_COMMAND_ID_MAIL_CLAIM, "mail.claim", "req", "resp"), func(context.Context, *rpc.CommandRequest) (*anypb.Any, error) {
+		calls++
+		return anypb.New(wrapperspb.String("claimed"))
+	}); err != nil {
+		t.Fatalf("register claim failed: %v", err)
+	}
+	payload, _ := anypb.New(wrapperspb.String("same"))
+	req := &rpc.CommandRequest{
+		CommandId: rpc.CommandID_COMMAND_ID_MAIL_CLAIM,
+		Uid:       10001,
+		Seq:       7,
+		Payload:   payload,
+	}
+	firstDispatcher := NewIdempotentCommandDispatcherWithStore(registry, store, time.Minute)
+	if _, err := firstDispatcher.Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("first dispatch failed: %v", err)
+	}
+	secondDispatcher := NewIdempotentCommandDispatcherWithStore(registry, store, time.Minute)
+	resp, err := secondDispatcher.Dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second dispatch failed: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected persisted replay without handler call, got %d calls", calls)
+	}
+	if resp.GetCode() != 0 || resp.GetPayload() == nil {
+		t.Fatalf("unexpected replay response: %+v", resp)
+	}
+}
+
+type fakeCommandIdempotencyStore struct {
+	records map[string]commandIdempotencyRecord
+}
+
+func (f *fakeCommandIdempotencyStore) GetCommandIdempotency(_ context.Context, key string) (string, *rpc.CommandResponse, bool, error) {
+	record, ok := f.records[key]
+	return record.hash, record.response, ok, nil
+}
+
+func (f *fakeCommandIdempotencyStore) SaveCommandIdempotency(_ context.Context, key string, requestHash string, response *rpc.CommandResponse, _ time.Duration) error {
+	f.records[key] = commandIdempotencyRecord{
+		hash:     requestHash,
+		response: response,
+	}
+	return nil
 }

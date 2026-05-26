@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
+	"globalmail/api/rpc"
 	"globalmail/domain/globalmail"
 
 	goredis "github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/proto"
 )
 
 type Repository struct {
@@ -171,6 +174,72 @@ func (r *Repository) SetUserProfile(ctx context.Context, profile globalmail.User
 	return r.client.Set(ctx, r.userProfileKey(profile.RoleID), payload, ttl).Err()
 }
 
+func (r *Repository) TryAcquireGlobalMailRebuildLock(ctx context.Context, version int64, ttl time.Duration) (func(context.Context) error, bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	key := r.globalMailRebuildLockKey(version)
+	token := strconv.FormatInt(time.Now().UnixNano(), 10)
+	acquired, err := r.client.SetNX(ctx, key, token, ttl).Result()
+	if err != nil || !acquired {
+		return func(context.Context) error { return nil }, acquired, err
+	}
+	release := func(ctx context.Context) error {
+		script := `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+`
+		return r.client.Eval(ctx, script, []string{key}, token).Err()
+	}
+	return release, true, nil
+}
+
+func (r *Repository) GetCommandIdempotency(ctx context.Context, key string) (string, *rpc.CommandResponse, bool, error) {
+	values, err := r.client.HMGet(ctx, r.commandIdempotencyKey(key), "hash", "response").Result()
+	if err != nil {
+		return "", nil, false, err
+	}
+	if len(values) != 2 || values[0] == nil || values[1] == nil {
+		return "", nil, false, nil
+	}
+	hash, ok := values[0].(string)
+	if !ok {
+		return "", nil, false, fmt.Errorf("invalid command idempotency hash type %T", values[0])
+	}
+	var payload []byte
+	switch value := values[1].(type) {
+	case string:
+		payload = []byte(value)
+	case []byte:
+		payload = value
+	default:
+		return "", nil, false, fmt.Errorf("invalid command idempotency response type %T", values[1])
+	}
+	var response rpc.CommandResponse
+	if err := proto.Unmarshal(payload, &response); err != nil {
+		return "", nil, false, err
+	}
+	return hash, &response, true, nil
+}
+
+func (r *Repository) SaveCommandIdempotency(ctx context.Context, key string, requestHash string, response *rpc.CommandResponse, ttl time.Duration) error {
+	payload, err := proto.Marshal(response)
+	if err != nil {
+		return err
+	}
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	redisKey := r.commandIdempotencyKey(key)
+	pipe := r.client.TxPipeline()
+	pipe.HSet(ctx, redisKey, "hash", requestHash, "response", payload)
+	pipe.Expire(ctx, redisKey, ttl)
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
 func (r *Repository) key(name string) string {
 	return r.prefix + name
 }
@@ -185,6 +254,14 @@ func (r *Repository) globalMailByServerKey(serverID int) string {
 
 func (r *Repository) userProfileKey(roleID int64) string {
 	return fmt.Sprintf("%sMailUserProfile:%d", r.prefix, roleID)
+}
+
+func (r *Repository) globalMailRebuildLockKey(version int64) string {
+	return fmt.Sprintf("%sGlobalMailRebuildLock:%d", r.prefix, version)
+}
+
+func (r *Repository) commandIdempotencyKey(key string) string {
+	return fmt.Sprintf("%sCommandIdempotency:%s", r.prefix, key)
 }
 
 func serverIDsFromConditions(conditions []globalmail.Condition) []int {

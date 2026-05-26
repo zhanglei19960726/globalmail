@@ -9,13 +9,20 @@ import (
 	"time"
 )
 
+const (
+	globalMailRebuildLockTTL      = 30 * time.Second
+	globalMailRebuildWaitInterval = 100 * time.Millisecond
+)
+
 type LocalCache struct {
-	repo    MailRepository
-	cache   CacheRepository
-	metrics ConsistencyMetrics
-	value   atomic.Value // *CacheSnapshot
-	mu      sync.Mutex
-	now     func() time.Time
+	repo                MailRepository
+	cache               CacheRepository
+	metrics             ConsistencyMetrics
+	value               atomic.Value // *CacheSnapshot
+	mu                  sync.Mutex
+	now                 func() time.Time
+	rebuildLockTTL      time.Duration
+	rebuildWaitInterval time.Duration
 }
 
 type CacheSnapshot struct {
@@ -36,9 +43,11 @@ type CompiledCondition struct {
 
 func NewLocalCache(repo MailRepository, cache CacheRepository) *LocalCache {
 	c := &LocalCache{
-		repo:  repo,
-		cache: cache,
-		now:   time.Now,
+		repo:                repo,
+		cache:               cache,
+		now:                 time.Now,
+		rebuildLockTTL:      globalMailRebuildLockTTL,
+		rebuildWaitInterval: globalMailRebuildWaitInterval,
 	}
 	c.value.Store(&CacheSnapshot{
 		MailsByID:          map[int64]GlobalMail{},
@@ -46,6 +55,15 @@ func NewLocalCache(repo MailRepository, cache CacheRepository) *LocalCache {
 		CompiledConditions: map[int64][]CompiledCondition{},
 	})
 	return c
+}
+
+func (c *LocalCache) SetRebuildLockOptions(lockTTL, waitInterval time.Duration) {
+	if lockTTL > 0 {
+		c.rebuildLockTTL = lockTTL
+	}
+	if waitInterval > 0 {
+		c.rebuildWaitInterval = waitInterval
+	}
 }
 
 func (c *LocalCache) Snapshot() *CacheSnapshot {
@@ -125,19 +143,24 @@ func (c *LocalCache) refresh(ctx context.Context, version int64) error {
 
 func (c *LocalCache) rebuildSharedCache(ctx context.Context, version int64, now time.Time) ([]GlobalMail, error) {
 	result, err, shared := globalMailCacheRebuilds.Do(strconv.FormatInt(version, 10), func() (interface{}, error) {
-		mails, err := c.repo.GetPublishedGlobalMails(ctx, now)
-		if err != nil {
-			return nil, err
-		}
-		for _, mail := range mails {
-			if err := c.cache.SetGlobalMail(ctx, mail); err != nil {
+		if locker, ok := c.cache.(CacheRebuildLocker); ok {
+			release, acquired, err := locker.TryAcquireGlobalMailRebuildLock(ctx, version, c.rebuildLockTTL)
+			if err != nil {
 				return nil, err
 			}
-			if err := c.cache.AddGlobalMailToIndexes(ctx, mail); err != nil {
-				return nil, err
+			if acquired {
+				defer func() { _ = release(ctx) }()
+				c.incCounter("globalmail_cache_rebuild_lock_acquired_total", nil)
+				return c.loadPublishedFromMySQLAndRefill(ctx, now)
 			}
+			c.incCounter("globalmail_cache_rebuild_lock_wait_total", nil)
+			mails, ok, err := c.waitForSharedCache(ctx, now, c.rebuildLockTTL)
+			if err != nil || ok {
+				return mails, err
+			}
+			c.incCounter("globalmail_cache_rebuild_lock_timeout_total", nil)
 		}
-		return mails, nil
+		return c.loadPublishedFromMySQLAndRefill(ctx, now)
 	})
 	if shared {
 		c.incCounter("globalmail_cache_rebuild_shared_total", nil)
@@ -146,6 +169,45 @@ func (c *LocalCache) rebuildSharedCache(ctx context.Context, version int64, now 
 		return nil, err
 	}
 	return result.([]GlobalMail), nil
+}
+
+func (c *LocalCache) loadPublishedFromMySQLAndRefill(ctx context.Context, now time.Time) ([]GlobalMail, error) {
+	mails, err := c.repo.GetPublishedGlobalMails(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	for _, mail := range mails {
+		if err := c.cache.SetGlobalMail(ctx, mail); err != nil {
+			return nil, err
+		}
+		if err := c.cache.AddGlobalMailToIndexes(ctx, mail); err != nil {
+			return nil, err
+		}
+	}
+	return mails, nil
+}
+
+func (c *LocalCache) waitForSharedCache(ctx context.Context, now time.Time, timeout time.Duration) ([]GlobalMail, bool, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(c.rebuildWaitInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-timer.C:
+			return nil, false, nil
+		case <-ticker.C:
+			mails, ok, err := c.loadFromSharedCache(ctx, now)
+			if err != nil {
+				return nil, false, err
+			}
+			if ok {
+				return mails, true, nil
+			}
+		}
+	}
 }
 
 func (c *LocalCache) loadFromSharedCache(ctx context.Context, now time.Time) ([]GlobalMail, bool, error) {

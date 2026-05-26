@@ -54,7 +54,10 @@ game:
   request_queue_capacity: 1024
   request_role_queue_capacity: 32
   request_timeout: 3s
+  command_idempotency_ttl: 10m
   global_mail_poll_interval: 30s
+  global_mail_rebuild_lock_ttl: 30s
+  global_mail_rebuild_wait_interval: 100ms
 
 outbox:
   flush_interval: 1s

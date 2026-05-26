@@ -100,6 +100,7 @@ type fakeCacheRepo struct {
 	version   int64
 	mails     map[int64]GlobalMail
 	activeIDs []int64
+	lockHeld  bool
 }
 
 func (f *fakeCacheRepo) GetGlobalMailVersion(context.Context) (int64, error) {
@@ -169,6 +170,21 @@ func (f *fakeCacheRepo) SetGlobalMailsByServer(context.Context, int, []int64) er
 
 func (f *fakeCacheRepo) GetUserProfile(context.Context, int64) (UserProfile, bool, error) {
 	return UserProfile{}, false, nil
+}
+
+func (f *fakeCacheRepo) TryAcquireGlobalMailRebuildLock(context.Context, int64, time.Duration) (func(context.Context) error, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lockHeld {
+		return func(context.Context) error { return nil }, false, nil
+	}
+	f.lockHeld = true
+	return func(context.Context) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.lockHeld = false
+		return nil
+	}, true, nil
 }
 
 type fakeOutboxRepo struct {
