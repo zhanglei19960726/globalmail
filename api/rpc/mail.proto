@@ -4,7 +4,7 @@ package globalmail.rpc;
 
 option go_package = "globalmail/api/rpc;rpc";
 
-service MailService {
+service PlayerMailService {
   rpc ListGlobalMails(ListGlobalMailsRequest) returns (ListGlobalMailsResponse);
   rpc MarkGlobalMailRead(GlobalMailStateRequest) returns (GlobalMailStateResponse);
   rpc ClaimGlobalMail(ClaimGlobalMailRequest) returns (GlobalMailStateResponse);

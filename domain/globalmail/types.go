@@ -95,12 +95,26 @@ type UserGlobalMailState struct {
 }
 
 type RewardGrant struct {
-	RoleID       int64     `json:"role_id"`
-	ServerID     int       `json:"server_id"`
-	GlobalMailID int64     `json:"global_mail_id"`
-	LootIndex    int       `json:"loot_index"`
-	GrantKey     string    `json:"grant_key"`
-	CreateTime   time.Time `json:"create_time"`
+	RoleID           int64           `json:"role_id"`
+	ServerID         int             `json:"server_id"`
+	GlobalMailID     int64           `json:"global_mail_id"`
+	LootIndex        int             `json:"loot_index"`
+	Loot             json.RawMessage `json:"loot,omitempty"`
+	GrantKey         string          `json:"grant_key"`
+	Status           string          `json:"status"`
+	ExternalRewardID string          `json:"external_reward_id,omitempty"`
+	FailureReason    string          `json:"failure_reason,omitempty"`
+	CreateTime       time.Time       `json:"create_time"`
+	UpdateTime       time.Time       `json:"update_time"`
+}
+
+type BackpackGrant struct {
+	RoleID     int64           `json:"role_id"`
+	ServerID   int             `json:"server_id"`
+	GrantKey   string          `json:"grant_key"`
+	LootIndex  int             `json:"loot_index"`
+	Loot       json.RawMessage `json:"loot,omitempty"`
+	CreateTime time.Time       `json:"create_time"`
 }
 
 type PersonalMail struct {

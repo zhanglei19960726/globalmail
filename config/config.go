@@ -29,15 +29,15 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	Service ServiceConfig `yaml:"service"`
-	MySQL   MySQLConfig   `yaml:"mysql"`
-	Redis   RedisConfig   `yaml:"redis"`
-	Kafka   KafkaConfig   `yaml:"kafka"`
-	Etcd    EtcdConfig    `yaml:"etcd"`
-	Gate    GateConfig    `yaml:"gate"`
-	Acc     AccConfig     `yaml:"acc"`
-	Game    GameConfig    `yaml:"game"`
-	Outbox  OutboxConfig  `yaml:"outbox"`
+	Service   ServiceConfig   `yaml:"service"`
+	MySQL     MySQLConfig     `yaml:"mysql"`
+	Redis     RedisConfig     `yaml:"redis"`
+	Kafka     KafkaConfig     `yaml:"kafka"`
+	Etcd      EtcdConfig      `yaml:"etcd"`
+	Gateway   GatewayConfig   `yaml:"gateway"`
+	Account   AccountConfig   `yaml:"account"`
+	Player    PlayerConfig    `yaml:"player"`
+	MailRelay MailRelayConfig `yaml:"mail_relay"`
 }
 
 type ServiceConfig struct {
@@ -83,19 +83,19 @@ type EtcdConfig struct {
 	ServiceKeyPrefix  string   `yaml:"service_key_prefix"`
 }
 
-type GateConfig struct {
-	RouteTTL              Duration `yaml:"route_ttl"`
-	VirtualNodes          int      `yaml:"virtual_nodes"`
-	SessionTTL            Duration `yaml:"session_ttl"`
-	GateConnRenewInterval Duration `yaml:"gate_conn_renew_interval"`
+type GatewayConfig struct {
+	RouteTTL                 Duration `yaml:"route_ttl"`
+	VirtualNodes             int      `yaml:"virtual_nodes"`
+	SessionTTL               Duration `yaml:"session_ttl"`
+	GatewayConnRenewInterval Duration `yaml:"gateway_conn_renew_interval"`
 }
 
-type AccConfig struct {
-	LoginTokenTTL   Duration `yaml:"login_token_ttl"`
-	GameServiceAddr string   `yaml:"game_service_addr"`
+type AccountConfig struct {
+	LoginTokenTTL     Duration `yaml:"login_token_ttl"`
+	PlayerServiceAddr string   `yaml:"player_service_addr"`
 }
 
-type GameConfig struct {
+type PlayerConfig struct {
 	RequestQueueWorkers      int      `yaml:"request_queue_workers"`
 	RequestQueueCapacity     int      `yaml:"request_queue_capacity"`
 	RequestRoleQueueCapacity int      `yaml:"request_role_queue_capacity"`
@@ -106,7 +106,7 @@ type GameConfig struct {
 	GlobalMailRebuildWait    Duration `yaml:"global_mail_rebuild_wait_interval"`
 }
 
-type OutboxConfig struct {
+type MailRelayConfig struct {
 	FlushInterval Duration `yaml:"flush_interval"`
 	FetchLimit    int      `yaml:"fetch_limit"`
 	LockTTL       Duration `yaml:"lock_ttl"`
@@ -145,17 +145,17 @@ func Default() Config {
 			KeepAliveInterval: Duration{Duration: 3 * time.Second},
 			ServiceKeyPrefix:  "/rh/services",
 		},
-		Gate: GateConfig{
-			RouteTTL:              Duration{Duration: 5 * time.Minute},
-			VirtualNodes:          100,
-			SessionTTL:            Duration{Duration: 90 * time.Second},
-			GateConnRenewInterval: Duration{Duration: 30 * time.Second},
+		Gateway: GatewayConfig{
+			RouteTTL:                 Duration{Duration: 5 * time.Minute},
+			VirtualNodes:             100,
+			SessionTTL:               Duration{Duration: 90 * time.Second},
+			GatewayConnRenewInterval: Duration{Duration: 30 * time.Second},
 		},
-		Acc: AccConfig{
-			LoginTokenTTL:   Duration{Duration: 2 * time.Minute},
-			GameServiceAddr: "127.0.0.1:9001",
+		Account: AccountConfig{
+			LoginTokenTTL:     Duration{Duration: 2 * time.Minute},
+			PlayerServiceAddr: "127.0.0.1:9001",
 		},
-		Game: GameConfig{
+		Player: PlayerConfig{
 			RequestQueueWorkers:      4,
 			RequestQueueCapacity:     1024,
 			RequestRoleQueueCapacity: 32,
@@ -165,7 +165,7 @@ func Default() Config {
 			GlobalMailRebuildLockTTL: Duration{Duration: 30 * time.Second},
 			GlobalMailRebuildWait:    Duration{Duration: 100 * time.Millisecond},
 		},
-		Outbox: OutboxConfig{
+		MailRelay: MailRelayConfig{
 			FlushInterval: Duration{Duration: time.Second},
 			FetchLimit:    100,
 			LockTTL:       Duration{Duration: 5 * time.Minute},
@@ -215,59 +215,59 @@ func (c Config) Validate() error {
 	if c.Etcd.KeepAliveInterval.Duration <= 0 {
 		return errors.New("etcd keepalive interval must be positive")
 	}
-	if c.Gate.RouteTTL.Duration <= 0 {
-		return errors.New("gate route ttl must be positive")
+	if c.Gateway.RouteTTL.Duration <= 0 {
+		return errors.New("gateway route ttl must be positive")
 	}
-	if c.Gate.VirtualNodes <= 0 {
-		return errors.New("gate virtual nodes must be positive")
+	if c.Gateway.VirtualNodes <= 0 {
+		return errors.New("gateway virtual nodes must be positive")
 	}
-	if c.Gate.SessionTTL.Duration <= 0 {
-		return errors.New("gate session ttl must be positive")
+	if c.Gateway.SessionTTL.Duration <= 0 {
+		return errors.New("gateway session ttl must be positive")
 	}
-	if c.Gate.GateConnRenewInterval.Duration <= 0 {
-		return errors.New("gate conn renew interval must be positive")
+	if c.Gateway.GatewayConnRenewInterval.Duration <= 0 {
+		return errors.New("gateway conn renew interval must be positive")
 	}
-	if c.Acc.LoginTokenTTL.Duration <= 0 {
-		return errors.New("acc login token ttl must be positive")
+	if c.Account.LoginTokenTTL.Duration <= 0 {
+		return errors.New("account login token ttl must be positive")
 	}
-	if c.Acc.GameServiceAddr == "" {
-		return errors.New("acc game service addr is required")
+	if c.Account.PlayerServiceAddr == "" {
+		return errors.New("account player service addr is required")
 	}
-	if c.Game.RequestQueueWorkers <= 0 {
-		return errors.New("game request queue workers must be positive")
+	if c.Player.RequestQueueWorkers <= 0 {
+		return errors.New("player request queue workers must be positive")
 	}
-	if c.Game.RequestQueueCapacity <= 0 {
-		return errors.New("game request queue capacity must be positive")
+	if c.Player.RequestQueueCapacity <= 0 {
+		return errors.New("player request queue capacity must be positive")
 	}
-	if c.Game.RequestRoleQueueCapacity <= 0 {
-		return errors.New("game request role queue capacity must be positive")
+	if c.Player.RequestRoleQueueCapacity <= 0 {
+		return errors.New("player request role queue capacity must be positive")
 	}
-	if c.Game.RequestTimeout.Duration <= 0 {
-		return errors.New("game request timeout must be positive")
+	if c.Player.RequestTimeout.Duration <= 0 {
+		return errors.New("player request timeout must be positive")
 	}
-	if c.Game.CommandIdempotencyTTL.Duration <= 0 {
-		return errors.New("game command idempotency ttl must be positive")
+	if c.Player.CommandIdempotencyTTL.Duration <= 0 {
+		return errors.New("player command idempotency ttl must be positive")
 	}
-	if c.Game.GlobalMailPollInterval.Duration <= 0 {
-		return errors.New("game global mail poll interval must be positive")
+	if c.Player.GlobalMailPollInterval.Duration <= 0 {
+		return errors.New("player global mail poll interval must be positive")
 	}
-	if c.Game.GlobalMailRebuildLockTTL.Duration <= 0 {
-		return errors.New("game global mail rebuild lock ttl must be positive")
+	if c.Player.GlobalMailRebuildLockTTL.Duration <= 0 {
+		return errors.New("player global mail rebuild lock ttl must be positive")
 	}
-	if c.Game.GlobalMailRebuildWait.Duration <= 0 {
-		return errors.New("game global mail rebuild wait interval must be positive")
+	if c.Player.GlobalMailRebuildWait.Duration <= 0 {
+		return errors.New("player global mail rebuild wait interval must be positive")
 	}
-	if c.Outbox.FlushInterval.Duration <= 0 {
-		return errors.New("outbox flush interval must be positive")
+	if c.MailRelay.FlushInterval.Duration <= 0 {
+		return errors.New("mail relay flush interval must be positive")
 	}
-	if c.Outbox.FetchLimit <= 0 {
-		return errors.New("outbox fetch limit must be positive")
+	if c.MailRelay.FetchLimit <= 0 {
+		return errors.New("mail relay fetch limit must be positive")
 	}
-	if c.Outbox.LockTTL.Duration <= 0 {
-		return errors.New("outbox lock ttl must be positive")
+	if c.MailRelay.LockTTL.Duration <= 0 {
+		return errors.New("mail relay lock ttl must be positive")
 	}
-	if c.Outbox.MaxRetries <= 0 {
-		return errors.New("outbox max retries must be positive")
+	if c.MailRelay.MaxRetries <= 0 {
+		return errors.New("mail relay max retries must be positive")
 	}
 	return nil
 }

@@ -20,7 +20,7 @@ func NewGlobalMailConsumer(cfg config.KafkaConfig, groupID string) *GlobalMailCo
 		groupID = cfg.ConsumerGroup
 	}
 	if groupID == "" {
-		groupID = "globalmail-gamesrv"
+		groupID = "globalmail-playersrv"
 	}
 	return &GlobalMailConsumer{
 		reader: kafkago.NewReader(kafkago.ReaderConfig{

@@ -62,16 +62,33 @@ func (UserGlobalMailStateModel) TableName() string {
 }
 
 type UserGlobalMailRewardLedgerModel struct {
-	GrantKey     string    `gorm:"column:grant_key;size:160;primaryKey"`
-	RoleID       int64     `gorm:"column:role_id;not null;index:idx_role_mail,priority:1"`
-	ServerID     int       `gorm:"column:server_id;not null"`
-	GlobalMailID int64     `gorm:"column:global_mail_id;not null;index:idx_role_mail,priority:2"`
-	LootIndex    int       `gorm:"column:loot_index;not null"`
-	CreateTime   time.Time `gorm:"column:create_time;not null"`
+	GrantKey         string    `gorm:"column:grant_key;size:160;primaryKey"`
+	RoleID           int64     `gorm:"column:role_id;not null;index:idx_role_mail,priority:1"`
+	ServerID         int       `gorm:"column:server_id;not null"`
+	GlobalMailID     int64     `gorm:"column:global_mail_id;not null;index:idx_role_mail,priority:2"`
+	LootIndex        int       `gorm:"column:loot_index;not null"`
+	Status           string    `gorm:"column:status;size:32;not null;index:idx_status"`
+	ExternalRewardID string    `gorm:"column:external_reward_id;size:128"`
+	FailureReason    string    `gorm:"column:failure_reason;size:1024"`
+	CreateTime       time.Time `gorm:"column:create_time;not null"`
+	UpdateTime       time.Time `gorm:"column:update_time;not null"`
 }
 
 func (UserGlobalMailRewardLedgerModel) TableName() string {
 	return "user_global_mail_reward_ledger"
+}
+
+type UserBackpackRewardModel struct {
+	GrantKey   string         `gorm:"column:grant_key;size:160;primaryKey"`
+	RoleID     int64          `gorm:"column:role_id;not null;index:idx_role_create_time,priority:1"`
+	ServerID   int            `gorm:"column:server_id;not null"`
+	LootIndex  int            `gorm:"column:loot_index;not null"`
+	Loot       datatypes.JSON `gorm:"column:loot;type:json"`
+	CreateTime time.Time      `gorm:"column:create_time;not null;index:idx_role_create_time,priority:2"`
+}
+
+func (UserBackpackRewardModel) TableName() string {
+	return "user_backpack_reward"
 }
 
 type UserPersonalMailModel struct {

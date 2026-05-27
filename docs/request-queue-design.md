@@ -1,12 +1,12 @@
 # 请求队列设计
 
-> 文档定位：说明 `gamesrv` 同步请求队列的目标、边界、背压、超时、配置、监控和演进方向。它是 `runtime-flows.md` 中命令分发链路的详细设计。
+> 文档定位：说明 `playersrv` 同步请求队列的目标、边界、背压、超时、配置、监控和演进方向。它是 `runtime-flows.md` 中命令分发链路的详细设计。
 
 ## 快速摘要
 
 | 主题 | 设计 |
 | --- | --- |
-| 放置位置 | `GameCommandService.Dispatch` 入口 |
+| 放置位置 | `PlayerCommandService.Dispatch` 入口 |
 | 队列类型 | 单进程全局容量 + `RoleID` 独立 lane |
 | 消费模型 | 同一 `RoleID` FIFO 串行，不同 `RoleID` 可并行 |
 | 队列满 | 返回 `CommandResponse(code=429)` |
@@ -15,7 +15,7 @@
 
 ## 1. 目标
 
-请求队列用于保护 `gamesrv` 的同步玩家请求链路，解决高峰流量、慢请求和瞬时抖动导致的服务卡死问题。
+请求队列用于保护 `playersrv` 的同步玩家请求链路，解决高峰流量、慢请求和瞬时抖动导致的服务卡死问题。
 
 它的目标是：
 
@@ -25,15 +25,15 @@
 - 超时：限制单个请求从入队到处理完成的最大耗时。
 - 可观测：为后续暴露队列长度、耗时、超时、拒绝等指标留出明确边界。
 
-请求队列不是可靠消息队列，不替代 Kafka。它不保证跨进程持久化、不做失败重试、不做广播，只用于单个 `gamesrv` 进程内的同步请求保护。
+请求队列不是可靠消息队列，不替代 Kafka。它不保证跨进程持久化、不做失败重试、不做广播，只用于单个 `playersrv` 进程内的同步请求保护。
 
 ## 2. 放置位置
 
-当前队列放在 `gamesrv.GameCommandService.Dispatch` 入口：
+当前队列放在 `playersrv.PlayerCommandService.Dispatch` 入口：
 
 ```text
-gatesrv
-    -> GameCommandService.Dispatch
+gatewaysrv
+    -> PlayerCommandService.Dispatch
     -> CommandRequestQueue global capacity
     -> RoleID lane
     -> worker pool
@@ -43,14 +43,14 @@ gatesrv
 
 选择这个位置的原因：
 
-- `gatesrv` 仍保持轻量，只负责连接、鉴权、路由和转发。
-- `gamesrv` 最清楚本机业务处理能力，适合按实例控制并发和排队。
+- `gatewaysrv` 仍保持轻量，只负责连接、鉴权、路由和转发。
+- `playersrv` 最清楚本机业务处理能力，适合按实例控制并发和排队。
 - 队列保护的是业务执行入口，而不是登录、路由、Kafka 消费等其它链路。
 - 不改变 `command.proto` 的请求和回包结构，客户端协议保持稳定。
 
 ## 3. 核心模型
 
-当前实现位于 `app/gamesrv/request_queue.go`。
+当前实现位于 `app/playersrv/request_queue.go`。
 
 ```text
 CommandRequestQueue:
@@ -82,7 +82,7 @@ commandJob:
 6. lane 按 FIFO 顺序取出请求。
 7. worker 调用 CommandRegistry.Dispatch。
 8. handler 返回后组装 CommandResponse。
-9. Dispatch 把响应返回给上游 gatesrv。
+9. Dispatch 把响应返回给上游 gatewaysrv。
 ```
 
 如果 `role_id` 为空，队列会退回使用 `uid` 作为 lane key，避免所有无角色请求落到同一个默认 lane。
@@ -167,7 +167,7 @@ t2:
 
 | 层级 | 作用 |
 | --- | --- |
-| 全局容量 | 限制单个 `gamesrv` 上所有排队和处理中的请求总量 |
+| 全局容量 | 限制单个 `playersrv` 上所有排队和处理中的请求总量 |
 | RoleID lane 容量 | 限制单个玩家最多允许排队的请求数量 |
 
 当前策略：
@@ -183,9 +183,9 @@ t2:
 
 这样可以避免高峰期请求全部堆在内存中，也避免 gRPC handler 被长时间阻塞。
 
-`429` 表示当前 `gamesrv` 繁忙。上游可以按业务策略处理：
+`429` 表示当前 `playersrv` 繁忙。上游可以按业务策略处理：
 
-- `gatesrv` 可直接把繁忙响应返回客户端。
+- `gatewaysrv` 可直接把繁忙响应返回客户端。
 - 客户端可做短暂退避后重试。
 - 对非关键请求可直接提示稍后再试。
 - 对强一致写请求不应盲目自动重试，必须结合幂等设计。
@@ -220,7 +220,7 @@ t2:
 
 | 容量 | 保护对象 | 示例 |
 | --- | --- | --- |
-| `request_queue_capacity` | 保护整个 `gamesrv` 实例 | 大量玩家同时请求时，限制实例内存占用 |
+| `request_queue_capacity` | 保护整个 `playersrv` 实例 | 大量玩家同时请求时，限制实例内存占用 |
 | `request_role_queue_capacity` | 保护其它玩家不被单玩家挤占 | 某个玩家网络重试风暴，只占用自己的 lane 上限 |
 
 建议 `request_role_queue_capacity` 明显小于 `request_queue_capacity`。例如：
@@ -282,7 +282,7 @@ handler 编写要求：
 
 ```text
 客户端发送领取请求 seq=10
-    -> gamesrv 开始处理
+    -> playersrv 开始处理
     -> 队列层 3s 超时，返回 504
     -> handler 中某个下游操作如果没有响应 context，可能稍后仍写入成功
     -> 客户端重试 seq=10
@@ -298,7 +298,7 @@ handler 编写要求：
 
 ## 6. 关闭流程
 
-服务退出时，`cmd/gamesrv` 会调用 `CommandRequestQueue.Close()`。
+服务退出时，`cmd/playersrv` 会调用 `CommandRequestQueue.Close()`。
 
 关闭语义：
 
@@ -318,7 +318,7 @@ RoleID lane 在关闭时会收到统一的 `done` 信号并退出。已经进入
 YAML 配置：
 
 ```yaml
-game:
+player:
   request_queue_workers: 4
   request_queue_capacity: 1024
   request_role_queue_capacity: 32
@@ -341,14 +341,14 @@ game:
 - IO 密集型业务可以适当增加 worker，但必须关注 MySQL、Redis、下游 RPC 压力。
 - `request_queue_capacity` 不宜过大，过大的队列会把延迟问题隐藏成内存堆积。
 - `request_role_queue_capacity` 应明显小于全局容量，避免单个玩家的重试风暴影响其它玩家。
-- `request_timeout` 应小于客户端等待超时，并和 `gatesrv` 转发超时保持一致。
+- `request_timeout` 应小于客户端等待超时，并和 `gatewaysrv` 转发超时保持一致。
 
 ### 7.1 参数选择示例
 
 小规模开发环境：
 
 ```yaml
-game:
+player:
   request_queue_workers: 4
   request_queue_capacity: 1024
   request_role_queue_capacity: 32
@@ -358,7 +358,7 @@ game:
 IO 较多、MySQL/Redis 能力充足时：
 
 ```yaml
-game:
+player:
   request_queue_workers: 16
   request_queue_capacity: 4096
   request_role_queue_capacity: 32
@@ -368,7 +368,7 @@ game:
 强写入、需要保护数据库时：
 
 ```yaml
-game:
+player:
   request_queue_workers: 4
   request_queue_capacity: 1024
   request_role_queue_capacity: 16
@@ -404,7 +404,7 @@ game:
 
 上游处理建议：
 
-| 返回码 | gatesrv 行为 | 客户端行为 |
+| 返回码 | gatewaysrv 行为 | 客户端行为 |
 | --- | --- | --- |
 | `0` | 原样返回 | 正常处理 |
 | `429` | 原样返回，不清路由 | 可提示繁忙或退避重试 |
@@ -474,7 +474,7 @@ command_inflight:
 - 按 `CommandID` 在 RoleID lane 内做优先级，避免慢查询影响关键写请求。
 - 增加 RoleID lane 空闲回收，避免长时间运行后 lane map 持续增长。
 - 增加命令优先级，例如心跳、查询、写请求分级处理。
-- 在 `gatesrv` 增加转发超时和重试策略。
+- 在 `gatewaysrv` 增加转发超时和重试策略。
 - 增加幂等表或请求流水，处理超时后的重试和去重。
 - 暴露 Prometheus 指标和 pprof，辅助压测调参。
 

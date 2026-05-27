@@ -4,7 +4,7 @@ package globalmail.rpc;
 
 option go_package = "globalmail/api/rpc;rpc";
 
-service GateService {
+service GatewayService {
   rpc ResolveRoute(RouteRequest) returns (RouteResponse);
   rpc ClearRoute(RouteRequest) returns (ClearRouteResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);

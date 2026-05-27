@@ -44,10 +44,10 @@ globalmail/
 │
 ├── api/
 │   └── rpc/
-│       ├── login.proto            # HTTP 登录消息和 GameService 登录协议定义
-│       ├── gate.proto             # GateService 路由查询和清理协议定义
-│       ├── command.proto          # GameCommandService 和 CommandID 命令字定义
-│       ├── mail.proto             # MailService 全局邮件读取协议定义
+│       ├── login.proto            # HTTP 登录消息和 PlayerService 登录协议定义
+│       ├── gate.proto             # GatewayService 路由查询和清理协议定义
+│       ├── command.proto          # PlayerCommandService 和 CommandID 命令字定义
+│       ├── mail.proto             # PlayerMailService 全局邮件读取协议定义
 │       ├── *.pb.go                # protoc-gen-go 生成的请求/回包结构
 │       └── *_grpc.pb.go           # protoc-gen-go-grpc 生成的 gRPC service
 │
@@ -57,7 +57,7 @@ globalmail/
 │       ├── ports.go               # MySQL/Redis/Kafka/outbox 抽象接口
 │       ├── publisher.go           # 发布全局邮件应用服务
 │       ├── outbox.go              # Outbox Relay 应用逻辑
-│       ├── cache.go               # gamesrv 本地缓存骨架和条件过滤
+│       ├── cache.go               # playersrv 本地缓存、L2 回源和条件过滤
 │       └── *_test.go              # 领域层单元测试
 │
 ├── data/
@@ -66,21 +66,22 @@ globalmail/
 │   │   ├── models.go              # GORM Model 定义
 │   │   ├── mapper.go              # GORM Model 和领域模型转换
 │   │   └── repository.go          # Repository / OutboxRepository 实现
-│   ├── redis/                     # Redis 二级缓存实现
+│   ├── redis/                     # Redis 二级缓存、路由缓存、幂等缓存和重建锁
 │   │   ├── client.go              # Redis client 初始化
 │   │   ├── repository.go          # CacheRepository 实现
 │   │   └── routing.go             # DBLoginToken、DBGateConn、DBSrvRouter 实现
-│   ├── localcache/                # gamesrv 本地缓存实现，后续下沉
+│   ├── localcache/                # playersrv 本地缓存说明
 │   └── sqlschema/                 # 建表 SQL 常量
 │
 ├── infra/
 │   ├── kafka/                     # Kafka 事件总线适配
 │   │   ├── producer.go            # EventPublisher 实现
 │   │   └── consumer.go            # GlobalMailChanged 消费者，已实现
-│   └── etcd/                      # etcd 服务注册和发现适配
+│   ├── etcd/                      # etcd 服务注册和发现适配
 │       ├── client.go              # etcd client 初始化
 │       ├── registry.go            # 服务注册、状态更新和摘除
 │       └── discovery.go           # 服务发现和 watch
+│   └── metrics/                   # expvar 轻量指标适配
 │
 ├── config/
 │   ├── config.go                  # 第三方组件配置结构和 YAML 加载
@@ -99,38 +100,38 @@ globalmail/
 
 ### 3.0 `api/rpc/`
 
-`api/rpc/` 是客户端和服务端、服务和服务之间的协议契约层。请求、回包、命令字和 gRPC service 都先在 `.proto` 中定义，再通过 `protoc-gen-go` 和 `protoc-gen-go-grpc` 生成 Go 代码；`accsrv` 对外 HTTP 登录也复用这里生成的 protobuf message。
+`api/rpc/` 是客户端和服务端、服务和服务之间的协议契约层。请求、回包、命令字和 gRPC service 都先在 `.proto` 中定义，再通过 `protoc-gen-go` 和 `protoc-gen-go-grpc` 生成 Go 代码；`accountsrv` 对外 HTTP 登录也复用这里生成的 protobuf message。
 
 当前职责：
 
 ```text
 login.proto:
     LoginRequest/LoginResponse
-    GameService/Login
+    PlayerService/Login
 
 gate.proto:
-    GateService/ResolveRoute
-    GateService/ClearRoute
-    GateService/Heartbeat
+    GatewayService/ResolveRoute
+    GatewayService/ClearRoute
+    GatewayService/Heartbeat
 
 command.proto:
     CommandID
-    GameCommandService/Dispatch
-    GameCommandService/ListCommands
+    PlayerCommandService/Dispatch
+    PlayerCommandService/ListCommands
 
 mail.proto:
-    MailService/ListGlobalMails
-    MailService/MarkGlobalMailRead
-    MailService/ClaimGlobalMail
-    MailService/DeleteGlobalMail
+    PlayerMailService/ListGlobalMails
+    PlayerMailService/MarkGlobalMailRead
+    PlayerMailService/ClaimGlobalMail
+    PlayerMailService/DeleteGlobalMail
 ```
 
 使用原则：
 
 - 不在业务代码中手写命令字常量，新增命令先扩展 `CommandID`。
 - 不在 `app/*` 中自定义重复的请求/回包结构，优先使用 protobuf 生成结构。
-- `gatesrv` 只解析 `CommandID` 和透传 protobuf `Any` 载荷，不解析具体业务字段。
-- `gamesrv` 通过 `CommandRegistry` 把 `CommandID` 映射到具体 handler。
+- `gatewaysrv` 只解析 `CommandID` 和透传 protobuf `Any` 载荷，不解析具体业务字段。
+- `playersrv` 通过 `CommandRegistry` 把 `CommandID` 映射到具体 handler。
 
 ### 3.1 `domain/`
 
@@ -142,7 +143,7 @@ mail.proto:
 - 定义 `MailRepository`、`CacheRepository`、`EventPublisher`、`OutboxRepository` 接口。
 - 实现全局邮件发布流程：业务数据 + outbox + Redis version。
 - 实现 `OutboxRelay`：从 outbox 读取事件并发布到 Kafka 抽象接口。
-- 实现 `gamesrv` 本地缓存快照、版本刷新和条件过滤骨架。
+- 实现 `playersrv` 本地缓存快照、版本刷新、L2 回源合并和条件过滤。
 
 不负责：
 
@@ -158,8 +159,8 @@ mail.proto:
 
 - `data/mysql`：使用 GORM 实现 MySQL repository。
 - `data/sqlschema`：保存建表 SQL 常量。
-- `data/redis`：实现 Redis 二级缓存。
-- `data/localcache`：后续承载 `gamesrv` 本地缓存实现。
+- `data/redis`：实现 Redis 二级缓存、路由缓存、命令幂等缓存和缓存重建锁。
+- `data/localcache`：记录本地缓存实现边界；当前实现仍在 `domain/globalmail`。
 
 `data/mysql` 负责：
 
@@ -168,17 +169,18 @@ mail.proto:
 - 在同一个 MySQL 事务里写 `GlobalMail`、`GlobalMailCondition`、`GlobalMailOutboxEvent`。
 - 查询已发布全局邮件并转换为领域模型。
 - 保存玩家全局邮件状态。
+- 保存奖励账本和 `playersrv` 背包发放明细。
 - 扫描 pending outbox，并标记 published 或重试。
 
 `data/redis` 负责：
 
 - `GlobalMailVersion`
 - `GlobalMail:{globalMailId}`
-- `GlobalMailIndex`
 - `GlobalMailActiveIndex`
 - `GlobalMailByServer:{serverID}`
 - `MailUserProfile:{RoleID}`
-- 缓存重建锁和 TTL 抖动
+- `CommandIdempotency:{uid:command_id:seq}`
+- `GlobalMailRebuildLock:{version}`
 - `DBLoginToken`
 - `DBGateConn`
 - `DBSrvRouter`
@@ -191,11 +193,12 @@ mail.proto:
 
 - `infra/kafka`：Kafka producer、consumer、consumer group 管理。
 - `infra/etcd`：服务注册、lease 续租、服务发现和 watch。
+- `infra/metrics`：基于 expvar 的轻量指标适配。
 
 规划职责：
 
 - `infra/lb`：LB 摘除和 drain 操作。
-- `infra/metrics`：指标采集和告警事件。
+- 将 `infra/metrics` 对接到 Prometheus、OpenTelemetry 或统一告警后端。
 
 Kafka、etcd 不放在 `data/`，因为它们不是业务数据存取层，而是事件总线和服务治理基础设施。
 
@@ -206,23 +209,23 @@ Kafka、etcd 不放在 `data/`，因为它们不是业务数据存取层，而�
 当前重点：
 
 ```text
-app/accsrv:
+app/accountsrv:
     实现 HTTP POST /login，使用 protobuf LoginRequest/LoginResponse。
-    登录时调用 gamesrv GameService.Login 获取或创建用户，再写 DBLoginToken。
+    登录时调用 playersrv PlayerService.Login 获取或创建用户，再写 DBLoginToken。
 
-app/gatesrv:
-    实现 GateService 路由查询和清理。
+app/gatewaysrv:
+    实现 GatewayService 路由查询和清理。
     ConnectionManager 管理 ConnectionPool、Heartbeat、DBGateConn 续期和过期连接关闭。
     ConnectionPool 按 UID 和 ConnID 建索引，替换、删除、过期扫描时负责关闭真实连接。
-    CommandForwarder 解析 CommandRequest，按 UID Resolve 到 gamesrv，再调用 GameCommandService.Dispatch。
+    CommandForwarder 解析 CommandRequest，按 UID Resolve 到 playersrv，再调用 PlayerCommandService.Dispatch。
 
-app/gamesrv:
-    实现 GameService.Login。
-    实现 GameCommandService 和 CommandRegistry。
+app/playersrv:
+    实现 PlayerService.Login。
+    实现 PlayerCommandService 和 CommandRegistry。
     CommandRequestQueue 在 Dispatch 入口按 RoleID 分组，提供玩家独立 lane、worker pool 和队列满背压。
     同一 RoleID 的 lane 内 FIFO 串行，不同 RoleID 的 lane 可并行消费。
     注册 CommandID -> handler。
-    实现 MailService 和全局邮件命令 handler。
+    实现 PlayerMailService 和全局邮件命令 handler。
 ```
 
 ### 3.5 `config/`
@@ -270,13 +273,13 @@ etcd:
     etcd.keepalive_interval
     etcd.service_key_prefix
 
-Gate:
+Gateway:
     gate.route_ttl
     gate.virtual_nodes
     gate.session_ttl
-    gate.gate_conn_renew_interval
+    gate.gateway_conn_renew_interval
 
-Game:
+Player:
     game.request_queue_workers
     game.request_queue_capacity
     game.request_role_queue_capacity
@@ -300,15 +303,15 @@ Game:
 
 ```text
 cmd/
-├── accsrv/
+├── accountsrv/
 │   └── main.go                    # 登录鉴权服务启动入口，已实现 token 骨架
-├── gatesrv/
+├── gatewaysrv/
 │   └── main.go                    # 长连接网关服务启动入口，已实现路由骨架
-├── gamesrv/
+├── playersrv/
 │   └── main.go                    # 玩家业务服务启动入口，已实现事件消费骨架
-├── mgrsrv/
+├── adminsrv/
 │   └── main.go                    # GM/管理后台服务启动入口，已实现骨架
-├── outboxrelay/
+├── mailrelaysrv/
 │   └── main.go                    # Outbox Relay 事件投递进程，已实现
 └── recovery-controller/
     └── main.go                    # 自动化容灾控制器
@@ -317,37 +320,37 @@ app/
 ├── bootstrap/
 │   └── config.go                  # YAML 配置路径和退出信号公共工具，已实现
 │
-├── accsrv/
+├── accountsrv/
 │   ├── server.go                  # HTTP 登录接口和 protobuf 编解码，已实现 Login
-│   └── service.go                 # 登录业务编排，转发 gamesrv 后写 DBLoginToken
+│   └── service.go                 # 登录业务编排，转发 playersrv 后写 DBLoginToken
 │
-├── gatesrv/
-│   ├── server.go                  # gRPC GateService 路由查询/清理适配层，已实现
+├── gatewaysrv/
+│   ├── server.go                  # gRPC GatewayService 路由查询/清理适配层，已实现
 │   ├── connection.go              # ConnectionPool、心跳、DBGateConn 续期和过期连接关闭，已实现
-│   ├── command_forwarder.go       # 解析 CommandRequest 后转发到目标 gamesrv Dispatch，已实现
+│   ├── command_forwarder.go       # 解析 CommandRequest 后转发到目标 playersrv Dispatch，已实现
 │   ├── session.go                 # SessPool 路由缓存，已实现
-│   ├── router.go                  # UID 到 gamesrv 的一致性哈希路由，已实现
+│   ├── router.go                  # UID 到 playersrv 的一致性哈希路由，已实现
 │   ├── route_service.go           # session route、Redis route、etcd list 串联，已实现
-│   ├── etcd_provider.go           # etcd ready gamesrv 转路由节点，已实现
+│   ├── etcd_provider.go           # etcd ready playersrv 转路由节点，已实现
 │   └── handler.go                 # 客户端协议处理
 │
-├── gamesrv/
+├── playersrv/
 │   ├── server.go                  # 游戏业务 RPC 服务组装
-│   ├── account_service.go         # GameService.Login，负责用户获取或创建
-│   ├── command_service.go         # GameCommandService 通用命令分发和注册表，已实现
+│   ├── account_service.go         # PlayerService.Login，负责用户获取或创建
+│   ├── command_service.go         # PlayerCommandService 通用命令分发和注册表，已实现
 │   ├── request_queue.go           # Dispatch 按 RoleID 分组请求队列、worker pool 和队列满背压，已实现
 │   ├── mail_commands.go           # 邮件命令字注册和 Any 载荷适配，已实现
 │   ├── mail_handler.go            # 邮件相关协议处理
 │   ├── mail_service.go            # 全局邮件读取、状态合并、读/领/删编排，已实现
-│   ├── mail_rpc.go                # MailService gRPC 读取和状态接口适配层，已实现
+│   ├── mail_rpc.go                # PlayerMailService gRPC 读取和状态接口适配层，已实现
 │   └── event_consumer.go          # Kafka 事件消费并刷新本地缓存，已实现
 │
-├── mgrsrv/
+├── adminsrv/
 │   ├── server.go                  # 管理后台服务组装
 │   ├── mail_admin.go              # GM 创建/审核/发布全局邮件，当前合并在 server.go
 │   └── auth.go                    # 管理后台鉴权
 │
-├── outboxrelay/
+├── mailrelaysrv/
 │   ├── worker.go                  # 扫描 MySQL outbox 并投递 Kafka，已实现
 │   └── scheduler.go               # 批量、重试、退避调度
 │
@@ -357,7 +360,7 @@ app/
     └── action.go                  # 清路由、摘 LB、告警动作
 ```
 
-### 4.1 `accsrv`
+### 4.1 `accountsrv`
 
 登录鉴权服务，负责把外部登录凭证转换成服务端可信身份。
 
@@ -372,12 +375,12 @@ infra/etcd      # 服务注册
 不依赖：
 
 ```text
-gamesrv 本地缓存
+playersrv 本地缓存
 Kafka 全局邮件事件消费
-gatesrv SessPool
+gatewaysrv SessPool
 ```
 
-### 4.2 `gatesrv`
+### 4.2 `gatewaysrv`
 
 长连接网关服务，负责 WebSocket 连接、UID 绑定、连接位置记录和路由转发。
 
@@ -385,8 +388,8 @@ gatesrv SessPool
 
 ```text
 data/redis      # DBLoginToken、DBGateConn、DBSrvRouter
-infra/etcd      # watch gamesrv 健康实例列表
-app/gatesrv     # SessPool、RouteNode、协议转发
+infra/etcd      # watch playersrv 健康实例列表
+app/gatewaysrv     # SessPool、RouteNode、协议转发
 ```
 
 不依赖：
@@ -397,7 +400,7 @@ GORM Model
 GM 发布流程
 ```
 
-### 4.3 `gamesrv`
+### 4.3 `playersrv`
 
 玩家业务服务，负责处理玩家业务逻辑。全局邮件的高频读取、条件过滤、领取幂等都在这里编排。
 
@@ -407,12 +410,13 @@ GM 发布流程
 domain/globalmail   # 全局邮件领域能力
 data/mysql          # 玩家状态、领取状态
 data/redis          # 二级缓存和版本号
-data/localcache     # 本地缓存实现，后续下沉
+data/localcache     # 本地缓存边界说明
 infra/kafka         # 消费 GlobalMailChanged
 infra/etcd          # 服务注册
+infra/metrics       # 缓存刷新和 outbox 轻量指标
 ```
 
-### 4.4 `mgrsrv`
+### 4.4 `adminsrv`
 
 GM/管理后台服务，负责创建、审核、发布、下线全局邮件。
 
@@ -425,9 +429,9 @@ data/redis          # 更新 GlobalMailVersion 和缓存
 infra/etcd          # 服务注册
 ```
 
-`mgrsrv` 不直接逐台调用 `gamesrv`，而是通过 outbox + Kafka 通知。
+`adminsrv` 不直接逐台调用 `playersrv`，而是通过 outbox + Kafka 通知。
 
-### 4.5 `outboxrelay`
+### 4.5 `mailrelaysrv`
 
 事件投递进程，负责把 MySQL outbox 中的 pending 事件投递到 Kafka。
 
@@ -449,7 +453,7 @@ infra/kafka         # EventPublisher
 infra/etcd          # 实例状态和 lease 变化
 data/redis          # DBSrvRouter、DBGateConn 清理或检查
 infra/lb            # LB 摘除动作，后续接入
-infra/metrics       # 指标和告警，后续接入
+infra/metrics       # 指标采集适配，后续接统一告警
 ```
 
 ## 5. 后续目录规划

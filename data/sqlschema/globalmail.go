@@ -77,10 +77,26 @@ CREATE TABLE IF NOT EXISTS user_global_mail_reward_ledger (
     server_id      INT          NOT NULL COMMENT '区服ID',
     global_mail_id BIGINT       NOT NULL COMMENT '全局邮件ID',
     loot_index     INT          NOT NULL COMMENT '奖励下标',
+    status         VARCHAR(32)  NOT NULL COMMENT '发奖状态',
+    external_reward_id VARCHAR(128) NOT NULL DEFAULT '' COMMENT '外部奖励服务流水',
+    failure_reason VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '失败原因',
     create_time    DATETIME     NOT NULL,
+    update_time    DATETIME     NOT NULL,
     PRIMARY KEY (grant_key),
-    KEY idx_role_mail (role_id, global_mail_id)
+    KEY idx_role_mail (role_id, global_mail_id),
+    KEY idx_status (status)
 ) COMMENT='全局邮件奖励发放幂等流水表';
+
+CREATE TABLE IF NOT EXISTS user_backpack_reward (
+    grant_key   VARCHAR(160) NOT NULL COMMENT '背包发放幂等流水',
+    role_id     BIGINT       NOT NULL COMMENT '角色ID',
+    server_id   INT          NOT NULL COMMENT '区服ID',
+    loot_index  INT          NOT NULL COMMENT '奖励下标',
+    loot        JSON         NULL     COMMENT '奖励内容快照',
+    create_time DATETIME     NOT NULL,
+    PRIMARY KEY (grant_key),
+    KEY idx_role_create_time (role_id, create_time)
+) COMMENT='playersrv 背包奖励发放表';
 
 CREATE TABLE IF NOT EXISTS user_mail_cursor (
     role_id                    BIGINT   NOT NULL COMMENT '角色ID',

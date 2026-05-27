@@ -6,7 +6,7 @@ import "google/protobuf/any.proto";
 
 option go_package = "globalmail/api/rpc;rpc";
 
-service GameCommandService {
+service PlayerCommandService {
   rpc Dispatch(CommandRequest) returns (CommandResponse);
   rpc ListCommands(ListCommandsRequest) returns (ListCommandsResponse);
 }

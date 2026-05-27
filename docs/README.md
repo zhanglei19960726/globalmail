@@ -10,9 +10,10 @@
 | 2 | `runtime-flows.md` | 登录、连接、路由、命令分发、故障恢复等运行时链路 |
 | 3 | `requirements-design.md` | 全局邮件业务需求、MySQL/Redis/本地缓存/Kafka 设计 |
 | 4 | `data-consistency-idempotency.md` | 全局邮件数据一致性、Outbox、版本刷新、幂等和故障恢复 |
-| 5 | `request-queue-design.md` | `gamesrv` 按 `RoleID` 分组的请求队列、背压、超时和监控设计 |
-| 6 | `deployment-plan.md` | 部署拓扑、服务发现、扩缩容、健康检查、容灾 |
-| 7 | `code-structure.md` | 代码目录、分层职责、依赖方向 |
+| 5 | `backpack-design.md` | `playersrv` 背包奖励发放、奖励账本、发放明细和失败恢复 |
+| 6 | `request-queue-design.md` | `playersrv` 按 `RoleID` 分组的请求队列、背压、超时和监控设计 |
+| 7 | `deployment-plan.md` | 部署拓扑、服务发现、扩缩容、健康检查、容灾 |
+| 8 | `code-structure.md` | 代码目录、分层职责、依赖方向 |
 
 ## 文档边界
 
@@ -23,6 +24,7 @@
 | UID 路由 | `runtime-flows.md` | `deployment-plan.md` |
 | 请求队列 | `request-queue-design.md` | `runtime-flows.md` |
 | 全局邮件 | `requirements-design.md` | `data-consistency-idempotency.md` |
+| 背包奖励 | `backpack-design.md` | `runtime-flows.md`、`data-consistency-idempotency.md` |
 | 数据一致性和幂等 | `data-consistency-idempotency.md` | `requirements-design.md` |
 | 部署运维 | `deployment-plan.md` | `server-architecture.md` |
 
@@ -32,5 +34,6 @@
 - 运行时步骤写在 `runtime-flows.md`，部署细节写在 `deployment-plan.md`。
 - 业务表结构和缓存结构写在 `requirements-design.md`。
 - 全局邮件一致性边界、Outbox 状态机、幂等键和故障恢复统一维护在 `data-consistency-idempotency.md`。
+- 背包奖励的 `playersrv` 职责、发放流程、账本和明细表统一维护在 `backpack-design.md`。
 - 请求队列的返回码、超时、背压和监控统一维护在 `request-queue-design.md`。
 - 代码目录变化同步更新 `code-structure.md`。

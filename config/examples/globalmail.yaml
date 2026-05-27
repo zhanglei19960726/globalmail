@@ -1,6 +1,6 @@
 service:
-  name: gamesrv
-  instance_id: gamesrv-local-1
+  name: playersrv
+  instance_id: playersrv-local-1
   env: dev
   listen_addr: ":8080"
   public_addr: "127.0.0.1:8080"
@@ -27,7 +27,7 @@ kafka:
   brokers:
     - "127.0.0.1:9092"
   topic_prefix: "rh"
-  consumer_group: "gamesrv-local-1"
+  consumer_group: "playersrv-local-1"
 
 etcd:
   endpoints:
@@ -39,17 +39,17 @@ etcd:
   keepalive_interval: 3s
   service_key_prefix: "/rh/services"
 
-gate:
+gateway:
   route_ttl: 5m
   virtual_nodes: 100
   session_ttl: 90s
-  gate_conn_renew_interval: 30s
+  gateway_conn_renew_interval: 30s
 
-acc:
+account:
   login_token_ttl: 2m
-  game_service_addr: "127.0.0.1:9001"
+  player_service_addr: "127.0.0.1:9001"
 
-game:
+player:
   request_queue_workers: 4
   request_queue_capacity: 1024
   request_role_queue_capacity: 32
@@ -59,7 +59,7 @@ game:
   global_mail_rebuild_lock_ttl: 30s
   global_mail_rebuild_wait_interval: 100ms
 
-outbox:
+mail_relay:
   flush_interval: 1s
   fetch_limit: 100
   lock_ttl: 5m

@@ -7,15 +7,15 @@
 | 主题 | 策略 |
 | --- | --- |
 | 服务发现 | etcd 注册实例、lease 续租、ready/draining/offline 状态管理 |
-| 接入层 | `accsrv` 走 HTTP LB，`gatesrv` 承接 WebSocket 长连接 |
-| 请求保护 | `gamesrv` 使用按 `RoleID` 分组的本机请求队列做削峰、隔离、背压和超时 |
+| 接入层 | `accountsrv` 走 HTTP LB，`gatewaysrv` 承接 WebSocket 长连接 |
+| 请求保护 | `playersrv` 使用按 `RoleID` 分组的本机请求队列做削峰、隔离、背压和超时 |
 | 事件总线 | Kafka 只做事件通知，不替代 MySQL 权威数据 |
 | 容灾 | readiness 摘流、Redis TTL、客户端重连、`recovery-controller` 增强治理 |
 | 扩缩容 | gate 按连接数扩缩，game 按 CPU/业务请求量扩缩 |
 
 ## 1. 部署目标
 
-部署方案需要保证 `accsrv`、`gatesrv`、`gamesrv` 可以独立扩缩容，并在单个实例故障时通过健康检查、服务发现、TTL 和客户端重连恢复服务。
+部署方案需要保证 `accountsrv`、`gatewaysrv`、`playersrv` 可以独立扩缩容，并在单个实例故障时通过健康检查、服务发现、TTL 和客户端重连恢复服务。
 
 本文关注部署和运维策略。服务职责和请求链路见 `server-architecture.md`，全局邮件业务设计见 `requirements-design.md`。
 
@@ -37,10 +37,10 @@
 部署单元：
 
 ```text
-accsrv  : 多实例，无状态或弱状态
-gatesrv : 多实例，维护本机 WebSocket 长连接
-gamesrv : 多实例，处理玩家业务逻辑
-mgrsrv  : 内部管理服务，按访问控制部署
+accountsrv  : 多实例，无状态或弱状态
+gatewaysrv : 多实例，维护本机 WebSocket 长连接
+playersrv : 多实例，处理玩家业务逻辑
+adminsrv  : 内部管理服务，按访问控制部署
 ```
 
 ## 3. 部署拓扑
@@ -48,12 +48,12 @@ mgrsrv  : 内部管理服务，按访问控制部署
 ```mermaid
 flowchart TD
     client[客户端] --> lb[LB或入口层]
-    lb --> acc[accsrv实例组]
-    lb --> gate[gatesrv实例组]
+    lb --> acc[accountsrv实例组]
+    lb --> gate[gatewaysrv实例组]
 
     gate --> router[RouteNode]
     router --> etcd[etcd服务注册表]
-    router --> game[gamesrv实例组]
+    router --> game[playersrv实例组]
 
     acc --> redis[Redis]
     gate --> redis
@@ -61,7 +61,7 @@ flowchart TD
 
     acc --> mysql[MySQL]
     game --> mysql
-    mgr[mgrsrv] --> redis
+    mgr[adminsrv] --> redis
     mgr --> mysql
     mgr --> etcd
     mgr --> outbox[Outbox_Relay]
@@ -75,9 +75,9 @@ flowchart TD
 
 推荐策略：
 
-- `accsrv` 按登录请求量水平扩容。
-- `gatesrv` 按在线连接数和网络吞吐水平扩容。
-- `gamesrv` 按业务请求量、CPU 和内存水平扩容。
+- `accountsrv` 按登录请求量水平扩容。
+- `gatewaysrv` 按在线连接数和网络吞吐水平扩容。
+- `playersrv` 按业务请求量、CPU 和内存水平扩容。
 - etcd、Redis、MySQL、Kafka 使用高可用部署，避免成为单点。
 
 ## 4. etcd 服务发现方案
@@ -87,14 +87,14 @@ flowchart TD
 服务发现需要管理两类地址：
 
 ```text
-gatesrv:
+gatewaysrv:
     PublicAddr / GatewayAddr
     用于 LB 分流和其他服务推送到玩家当前 gate
 
-gamesrv:
+playersrv:
     FrpcAddr
     GrpcAddr
-    用于 gatesrv 路由玩家业务请求
+    用于 gatewaysrv 路由玩家业务请求
 ```
 
 推荐 key 设计：
@@ -122,7 +122,7 @@ etcd 管理规则：
 - `ready` 实例才允许被新路由选中。
 - `draining` 实例保留在 etcd 中，但 `RouteNode` 不再分配新玩家。
 - lease 过期或 key 删除后，watch 客户端要立即更新本地服务列表。
-- 服务列表变化时，`gatesrv` 本地缓存通过 etcd watch 增量更新，watch 异常后全量拉取兜底。
+- 服务列表变化时，`gatewaysrv` 本地缓存通过 etcd watch 增量更新，watch 异常后全量拉取兜底。
 
 实例启动流程：
 
@@ -161,20 +161,20 @@ ListReady(serviceName)
 
 ## 5. LB 和接入层
 
-`accsrv`：
+`accountsrv`：
 
 - 走 HTTP 负载均衡，客户端通过 `POST /login` 登录，请求和回包使用 `login.proto` 的 `LoginRequest/LoginResponse`。
 - 实例无状态，任意健康实例都可以处理登录。
-- 登录时转发 `gamesrv.GameService.Login` 完成用户注册/资料初始化，成功后写 `DBLoginToken`，返回 `SessionKey`。
+- 登录时转发 `playersrv.PlayerService.Login` 完成用户注册/资料初始化，成功后写 `DBLoginToken`，返回 `SessionKey`。
 
-`gatesrv`：
+`gatewaysrv`：
 
 - 承接 WebSocket 长连接。
-- 新连接由 LB 分配到健康 `gatesrv`。
+- 新连接由 LB 分配到健康 `gatewaysrv`。
 - 连接建立后不做连接迁移，故障时依赖客户端重连。
 - LB 必须支持长连接超时配置，避免过早断开。
 - 进程内使用 `ConnectionPool` 管理真实连接和 session 元数据，支持按 UID、ConnID 查询。
-- 心跳只刷新本机连接池状态，Redis `DBGateConn` 按 `gate.gate_conn_renew_interval` 节流续期。
+- 心跳只刷新本机连接池状态，Redis `DBGateConn` 按 `gate.gateway_conn_renew_interval` 节流续期。
 - 实例 drain 时 readiness 先置为 false，停止接收新连接，再等待已有连接自然下线或主动 `CloseAll`。
 
 入口层要求：
@@ -187,7 +187,7 @@ ListReady(serviceName)
 
 ```text
 gate.session_ttl: 90s
-gate.gate_conn_renew_interval: 30s
+gate.gateway_conn_renew_interval: 30s
 client.heartbeat_interval: 10s
 lb.idle_timeout: 大于 session_ttl，建议 120s 以上
 ```
@@ -208,7 +208,7 @@ rh.system-config-events    : 系统配置变更事件，预留
 全局邮件事件投递链路：
 
 ```text
-gmsrv/mgrsrv:
+gmsrv/adminsrv:
     MySQL 事务写业务数据和 GlobalMailOutboxEvent
 
 Outbox Relay:
@@ -218,7 +218,7 @@ Outbox Relay:
     Redis 和 Kafka 都成功后标记 published
     失败后保留 pending 并按退避策略重试
 
-gamesrv:
+playersrv:
     消费 Kafka 事件
     按 version 判断是否需要刷新本地缓存
     从 Redis/MySQL 加载最新数据
@@ -226,24 +226,24 @@ gamesrv:
 
 消费模型：
 
-- 每台 `gamesrv` 都需要收到全局邮件变更事件。
-- Kafka 中每台 `gamesrv` 建议使用独立 consumer group，确保事件广播到所有实例。
-- 如果使用同一个 consumer group，事件会被分摊消费，不适合刷新每台 `gamesrv` 本地缓存。
+- 每台 `playersrv` 都需要收到全局邮件变更事件。
+- Kafka 中每台 `playersrv` 建议使用独立 consumer group，确保事件广播到所有实例。
+- 如果使用同一个 consumer group，事件会被分摊消费，不适合刷新每台 `playersrv` 本地缓存。
 
 可靠性要求：
 
 - 事件 payload 只放 ID、version、action 等小字段，不放完整邮件内容。
 - 消费端必须按 version 幂等处理重复和乱序事件。
 - Outbox Relay、Redis 投影、Kafka 消费和玩家领取的幂等规则见 `data-consistency-idempotency.md`。
-- Kafka 延迟或故障时，Outbox Relay 重试，`gamesrv` 定时检查 `GlobalMailVersion` 兜底。
+- Kafka 延迟或故障时，Outbox Relay 重试，`playersrv` 定时检查 `GlobalMailVersion` 兜底。
 - Kafka 适合作为跨服务事件总线，但不能替代 MySQL 权威数据和 Redis 缓存版本。
 
-## 7. gamesrv 请求队列
+## 7. playersrv 请求队列
 
-`gamesrv` 的请求队列用于同步玩家请求的本机削峰和背压，不承担跨进程可靠投递：
+`playersrv` 的请求队列用于同步玩家请求的本机削峰和背压，不承担跨进程可靠投递：
 
 ```text
-gatesrv -> GameCommandService.Dispatch -> CommandRequestQueue -> RoleID lane -> worker pool -> CommandRegistry
+gatewaysrv -> PlayerCommandService.Dispatch -> CommandRequestQueue -> RoleID lane -> worker pool -> CommandRegistry
 ```
 
 部署建议：
@@ -284,19 +284,19 @@ dependency:
 
 各服务检查重点：
 
-- `accsrv`：登录依赖、Redis/MySQL 写入能力、第三方登录依赖。
-- `gatesrv`：WebSocket accept 能力、etcd/Redis 可用性、本机连接数是否超过水位。
-- `gamesrv`：业务处理能力、etcd/Redis/MySQL/Kafka 可用性、内部 RPC 端口可访问。
-- `mgrsrv`：内部鉴权、etcd/Redis/MySQL/Kafka 管理操作能力。
+- `accountsrv`：登录依赖、Redis/MySQL 写入能力、第三方登录依赖。
+- `gatewaysrv`：WebSocket accept 能力、etcd/Redis 可用性、本机连接数是否超过水位。
+- `playersrv`：业务处理能力、etcd/Redis/MySQL/Kafka 可用性、内部 RPC 端口可访问。
+- `adminsrv`：内部鉴权、etcd/Redis/MySQL/Kafka 管理操作能力。
 - `Outbox Relay`：MySQL outbox 读取能力、Kafka 投递能力、积压数量。
 
 ## 9. 扩缩容策略
 
-新增 `gatesrv`：
+新增 `gatewaysrv`：
 
 ```mermaid
 flowchart TD
-    newGate[新增gatesrv启动] --> register[注册服务地址]
+    newGate[新增gatewaysrv启动] --> register[注册服务地址]
     register --> lb[LB或入口开始分流]
     lb --> connect[新客户端连接]
     connect --> authToken[gate通过token查UID]
@@ -304,21 +304,21 @@ flowchart TD
     localSess --> writeGateConn[写DBGateConn为当前gate地址]
 ```
 
-新增 `gamesrv`：
+新增 `playersrv`：
 
 - 实例启动并向 etcd 注册 `FrpcAddr`、`GrpcAddr`。
 - `RouteNode` 或服务发现列表开始包含新节点。
-- 已有玩家继续走原 `gamesrv`，不强制迁移。
-- 新玩家或重建路由的玩家可能分配到新 `gamesrv`。
+- 已有玩家继续走原 `playersrv`，不强制迁移。
+- 新玩家或重建路由的玩家可能分配到新 `playersrv`。
 
-缩容 `gatesrv`：
+缩容 `gatewaysrv`：
 
 - 先从 LB 摘除，停止接收新连接。
 - 通知客户端或等待连接自然断开。
 - 保留短时间 drain 窗口。
 - 未清理的 `DBGateConn` 依赖 TTL 过期。
 
-缩容 `gamesrv`：
+缩容 `playersrv`：
 
 - 先把 etcd 实例状态更新为 `draining`，避免新路由选中。
 - 等待当前请求处理完成。
@@ -328,7 +328,7 @@ flowchart TD
 
 ## 10. 故障恢复
 
-`gatesrv` 故障：
+`gatewaysrv` 故障：
 
 ```text
 1. LB 健康检查失败，停止向故障 gate 分配新连接。
@@ -339,13 +339,13 @@ flowchart TD
 6. 旧 DBGateConn 靠 TTL 清理。
 ```
 
-`gamesrv` 故障：
+`playersrv` 故障：
 
 ```text
 1. 健康检查失败或 etcd lease 过期后从服务发现摘除。
 2. gate 发送请求失败或 CheckNodeTCPAddr 失败。
 3. gate 清理 session 内存 route 和 DBSrvRouter。
-4. gate 重新 RouteNode 选择健康 gamesrv。
+4. gate 重新 RouteNode 选择健康 playersrv。
 5. 业务层通过幂等处理请求已执行但回包丢失的情况。
 ```
 
@@ -353,14 +353,14 @@ etcd 故障：
 
 - 已经缓存的服务列表可以短时间继续使用。
 - 新实例注册和服务列表变更会受影响，需要快速告警。
-- `gatesrv` watch 断开后要重试，恢复后全量拉取服务列表。
+- `gatewaysrv` watch 断开后要重试，恢复后全量拉取服务列表。
 - 不允许把未知或过期实例作为新路由目标。
 
 Redis 故障：
 
 - 登录和连接绑定可能受影响，需要快速告警。
-- `gatesrv` 不应信任本地旧 token 创建新身份。
-- 全局邮件读取可以使用 `gamesrv` 旧本地缓存提供只读降级。
+- `gatewaysrv` 不应信任本地旧 token 创建新身份。
+- 全局邮件读取可以使用 `playersrv` 旧本地缓存提供只读降级。
 - 恢复后依赖版本和 TTL 逐步收敛。
 
 MySQL 故障：
@@ -373,7 +373,7 @@ Kafka 故障：
 
 - 全局邮件、活动、公告等事件通知会延迟。
 - Outbox Relay 不删除 pending 事件，等待 Kafka 恢复后继续投递。
-- `gamesrv` 通过定时检查 Redis `GlobalMailVersion` 兜底刷新本地缓存。
+- `playersrv` 通过定时检查 Redis `GlobalMailVersion` 兜底刷新本地缓存。
 - Kafka 恢复后可能投递旧事件，消费端必须按 version 幂等忽略。
 
 ## 11. 自动化容灾方案
@@ -390,16 +390,16 @@ Kafka 故障：
     LB 健康检查失败 -> 自动摘除实例
 
 路由级:
-    gatesrv watch etcd -> 自动更新健康 gamesrv 列表
+    gatewaysrv watch etcd -> 自动更新健康 playersrv 列表
     SendPktToAddr 失败 -> 自动清理 session route
     CheckNodeTCPAddr 失败 -> 自动清理 DBSrvRouter
-    RouteNode 重选 -> 自动路由到健康 gamesrv
+    RouteNode 重选 -> 自动路由到健康 playersrv
 
 连接级:
-    gatesrv 故障 -> 客户端心跳超时
+    gatewaysrv 故障 -> 客户端心跳超时
     客户端自动重连 LB
-    新 gatesrv 查 DBLoginToken 恢复 UID
-    新 gatesrv 覆盖写 DBGateConn
+    新 gatewaysrv 查 DBLoginToken 恢复 UID
+    新 gatewaysrv 覆盖写 DBGateConn
 ```
 
 ### 11.2 recovery-controller
@@ -428,14 +428,14 @@ Redis:
 自动化动作：
 
 ```text
-gamesrv unhealthy:
+playersrv unhealthy:
     1. 更新 etcd 状态为 draining 或 offline
     2. 阻止 RouteNode 继续选择该实例
     3. 删除或标记关联的 DBSrvRouter
-    4. 通知 gatesrv 刷新本地服务列表
+    4. 通知 gatewaysrv 刷新本地服务列表
     5. 触发告警并记录故障事件
 
-gatesrv unhealthy:
+gatewaysrv unhealthy:
     1. 从 LB 摘除该 gate
     2. 更新 etcd 状态为 offline
     3. 等待客户端自动重连
@@ -443,7 +443,7 @@ gatesrv unhealthy:
     5. 触发告警并记录故障事件
 
 etcd watch 异常:
-    1. gatesrv 使用短时间本地快照继续服务
+    1. gatewaysrv 使用短时间本地快照继续服务
     2. 自动重建 watch
     3. 恢复后全量拉取 ready 实例列表
 ```
@@ -451,8 +451,8 @@ etcd watch 异常:
 ### 11.3 自动化边界
 
 - 自动摘除只影响新流量，已经在处理中的请求依赖服务自身超时和幂等处理。
-- `gatesrv` 连接不做迁移，依赖客户端重连恢复。
-- `gamesrv` 自动重路由不能保证请求一定没有执行过，业务层必须支持幂等。
+- `gatewaysrv` 连接不做迁移，依赖客户端重连恢复。
+- `playersrv` 自动重路由不能保证请求一定没有执行过，业务层必须支持幂等。
 - Redis/MySQL 故障不自动跳过强一致写入，领取奖励等写路径必须返回失败或降级提示。
 
 ## 12. 配置项
@@ -516,7 +516,7 @@ InstanceUnhealthyThreshold
 
 - 回滚版本可以识别现有 `DBLoginToken`、`DBGateConn`、`DBSrvRouter`。
 - Redis key、MySQL 字段、etcd value 字段和 Kafka 事件 schema 变更要兼容至少一个发布周期。
-- 先回滚无状态服务，再处理长连接 `gatesrv` 的 drain。
+- 先回滚无状态服务，再处理长连接 `gatewaysrv` 的 drain。
 
 ## 14. 监控和告警
 
@@ -526,12 +526,12 @@ InstanceUnhealthyThreshold
 - WebSocket 当前连接数、连接建立失败率、心跳超时数。
 - `DBGateConn` 写入失败率和 TTL 续期失败率。
 - `RouteNode` 成功率、`DBSrvRouter` 命中率、重路由次数。
-- `gamesrv` 请求耗时、错误率、CPU、内存和 goroutine 数。
+- `playersrv` 请求耗时、错误率、CPU、内存和 goroutine 数。
 - etcd watch 断开次数、lease 续租失败率、服务列表变更延迟。
 - recovery-controller 自动摘除次数、自动清理路由次数、动作失败率。
 - Kafka 生产失败率、消费延迟、consumer lag、topic 积压。
 - Outbox Relay pending/processing/failed 数量、投递失败率、重试次数、最大滞留时间。
-- Redis 全局邮件投影写入失败率、`GlobalMailVersion` 推进失败率、`gamesrv` 本地版本落后量。
+- Redis 全局邮件投影写入失败率、`GlobalMailVersion` 推进失败率、`playersrv` 本地版本落后量。
 - 发布幂等命中次数、幂等冲突次数、领取重复发奖拦截次数、请求重试命中次数。
 - Redis/MySQL 请求耗时、错误率和连接池使用率。
 
@@ -539,11 +539,11 @@ InstanceUnhealthyThreshold
 
 - 任一服务可用实例数低于安全水位。
 - 登录成功率或 WebSocket 连接成功率异常下降。
-- `gamesrv` 大量发送失败或重路由。
+- `playersrv` 大量发送失败或重路由。
 - etcd lease 续租失败或 watch 大面积断开。
 - recovery-controller 动作失败或短时间重复摘除同类实例。
 - Kafka 投递失败、consumer lag 持续升高或 outbox 长时间积压。
 - outbox `failed` 持续增加，或最大滞留时间超过业务可接受窗口。
-- 多台 `gamesrv` 本地版本长期落后于 Redis `GlobalMailVersion`。
+- 多台 `playersrv` 本地版本长期落后于 Redis `GlobalMailVersion`。
 - Redis/MySQL 延迟升高或错误率升高。
-- `gatesrv` 单实例连接数超过上限。
+- `gatewaysrv` 单实例连接数超过上限。

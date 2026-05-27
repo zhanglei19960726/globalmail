@@ -19,6 +19,16 @@ type RewardRepository interface {
 	GrantGlobalMailReward(ctx context.Context, grant RewardGrant) (bool, error)
 }
 
+type RewardLedgerRepository interface {
+	ReserveGlobalMailReward(ctx context.Context, grant RewardGrant) (bool, error)
+	MarkGlobalMailRewardSucceeded(ctx context.Context, grantKey string, externalRewardID string, updatedAt time.Time) error
+	MarkGlobalMailRewardFailed(ctx context.Context, grantKey string, cause error, updatedAt time.Time) error
+}
+
+type BackpackRepository interface {
+	GrantBackpackReward(ctx context.Context, grant BackpackGrant) (externalRewardID string, granted bool, err error)
+}
+
 type CacheRepository interface {
 	GetGlobalMailVersion(ctx context.Context) (int64, error)
 	IncrementGlobalMailVersion(ctx context.Context) (int64, error)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"globalmail/domain/globalmail"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -25,6 +26,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserPersonalMailModel{},
 		&UserGlobalMailStateModel{},
 		&UserGlobalMailRewardLedgerModel{},
+		&UserBackpackRewardModel{},
 		&UserMailCursorModel{},
 		&GlobalMailOutboxEventModel{},
 		&GlobalMailIdempotencyModel{},
@@ -168,13 +170,34 @@ func (r *Repository) SaveUserState(ctx context.Context, state globalmail.UserGlo
 }
 
 func (r *Repository) GrantGlobalMailReward(ctx context.Context, grant globalmail.RewardGrant) (bool, error) {
+	if grant.Status == "" {
+		grant.Status = "succeeded"
+	}
+	return r.ReserveGlobalMailReward(ctx, grant)
+}
+
+func (r *Repository) ReserveGlobalMailReward(ctx context.Context, grant globalmail.RewardGrant) (bool, error) {
+	now := time.Now().UTC()
+	if grant.CreateTime.IsZero() {
+		grant.CreateTime = now
+	}
+	if grant.UpdateTime.IsZero() {
+		grant.UpdateTime = grant.CreateTime
+	}
 	model := UserGlobalMailRewardLedgerModel{
-		GrantKey:     grant.GrantKey,
-		RoleID:       grant.RoleID,
-		ServerID:     grant.ServerID,
-		GlobalMailID: grant.GlobalMailID,
-		LootIndex:    grant.LootIndex,
-		CreateTime:   grant.CreateTime,
+		GrantKey:         grant.GrantKey,
+		RoleID:           grant.RoleID,
+		ServerID:         grant.ServerID,
+		GlobalMailID:     grant.GlobalMailID,
+		LootIndex:        grant.LootIndex,
+		Status:           grant.Status,
+		ExternalRewardID: grant.ExternalRewardID,
+		FailureReason:    grant.FailureReason,
+		CreateTime:       grant.CreateTime,
+		UpdateTime:       grant.UpdateTime,
+	}
+	if model.Status == "" {
+		model.Status = "succeeded"
 	}
 	result := r.db.WithContext(ctx).
 		Clauses(clause.OnConflict{DoNothing: true}).
@@ -183,6 +206,52 @@ func (r *Repository) GrantGlobalMailReward(ctx context.Context, grant globalmail
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+func (r *Repository) MarkGlobalMailRewardSucceeded(ctx context.Context, grantKey string, externalRewardID string, updatedAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&UserGlobalMailRewardLedgerModel{}).
+		Where("grant_key = ?", grantKey).
+		Updates(map[string]interface{}{
+			"status":             "succeeded",
+			"external_reward_id": externalRewardID,
+			"failure_reason":     "",
+			"update_time":        updatedAt,
+		}).Error
+}
+
+func (r *Repository) MarkGlobalMailRewardFailed(ctx context.Context, grantKey string, cause error, updatedAt time.Time) error {
+	reason := ""
+	if cause != nil {
+		reason = cause.Error()
+	}
+	return r.db.WithContext(ctx).
+		Model(&UserGlobalMailRewardLedgerModel{}).
+		Where("grant_key = ?", grantKey).
+		Updates(map[string]interface{}{
+			"status":         "failed",
+			"failure_reason": reason,
+			"update_time":    updatedAt,
+		}).Error
+}
+
+func (r *Repository) GrantBackpackReward(ctx context.Context, grant globalmail.BackpackGrant) (string, bool, error) {
+	externalRewardID := "playersrv-backpack:" + grant.GrantKey
+	model := UserBackpackRewardModel{
+		GrantKey:   grant.GrantKey,
+		RoleID:     grant.RoleID,
+		ServerID:   grant.ServerID,
+		LootIndex:  grant.LootIndex,
+		Loot:       datatypes.JSON(grant.Loot),
+		CreateTime: grant.CreateTime,
+	}
+	result := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&model)
+	if result.Error != nil {
+		return "", false, result.Error
+	}
+	return externalRewardID, result.RowsAffected > 0, nil
 }
 
 func (r *Repository) FetchPending(ctx context.Context, limit int, lockedBy string, lockedUntil time.Time) ([]globalmail.OutboxEvent, error) {

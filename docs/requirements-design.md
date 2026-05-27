@@ -9,7 +9,7 @@
 | 写入模型 | 发布一封全局邮件，不按玩家逐个写个人邮件 |
 | 读取模型 | 玩家拉取时动态合并全局邮件和个人状态 |
 | 权威存储 | MySQL 保存邮件、条件、玩家状态和 outbox |
-| 缓存 | `gamesrv` 本地缓存 + Redis + MySQL 三级缓存 |
+| 缓存 | `playersrv` 本地缓存 + Redis + MySQL 三级缓存 |
 | 通知 | MySQL Outbox + Kafka 广播变更事件 |
 | 幂等 | 发布、Outbox、缓存投影、消费、领取和请求重试都必须支持重复执行，详细规则见 `data-consistency-idempotency.md` |
 
@@ -34,7 +34,7 @@
 - 玩家拉取邮箱时合并个人邮件和符合条件的全局邮件。
 - 玩家读取、领取、删除全局邮件时只写个人状态。
 - 奖励领取必须幂等，避免重复发奖。
-- 邮件内容高频读取时走 `gamesrv` 本地缓存 + Redis + MySQL 三级缓存，不直接打 MySQL。
+- 邮件内容高频读取时走 `playersrv` 本地缓存 + Redis + MySQL 三级缓存，不直接打 MySQL。
 - 使用 Kafka 作为业务事件总线，支持全局邮件发布通知，并为后续活动、公告、配置变更等事件扩展预留能力。
 
 不在本方案展开的内容：
@@ -51,10 +51,10 @@ flowchart TD
     tx --> relay[Outbox_Relay投递Kafka]
     tx --> version[递增GlobalMailVersion]
     relay --> notify[Kafka广播GlobalMailChanged]
-    notify --> refresh[gamesrv消费事件刷新本地缓存]
-    version --> fallback[gamesrv定时检查版本兜底]
+    notify --> refresh[playersrv消费事件刷新本地缓存]
+    version --> fallback[playersrv定时检查版本兜底]
 
-    player[玩家拉取邮件] --> localCache[读取gamesrv本地GlobalMailCache]
+    player[玩家拉取邮件] --> localCache[读取playersrv本地GlobalMailCache]
     localCache --> profile[读取玩家画像]
     profile --> filter[时间区服条件过滤]
     filter --> userState[合并玩家邮件状态]
@@ -189,7 +189,7 @@ CREATE TABLE global_mail_condition (
     server_id、register_time、channel、country、vip_level、total_recharge、corps_level、open_days
 
 读取路径:
-    缓存重建时读取并编译为 gamesrv 本地 CompiledCondition
+    缓存重建时读取并编译为 playersrv 本地 CompiledCondition
 
 约束:
     global_mail_id 必须对应存在的 GlobalMail
@@ -335,7 +335,7 @@ CREATE TABLE global_mail_outbox_event (
     投递失败增加 retry_count，并按 next_retry_time 退避重试
 
 消费幂等:
-    gamesrv 按 version 判断是否需要刷新本地缓存
+    playersrv 按 version 判断是否需要刷新本地缓存
 ```
 
 ### 4.3 写入事务
@@ -368,7 +368,7 @@ COMMIT;
 
 ```mermaid
 flowchart TD
-    req[玩家拉取邮件] --> local[gamesrv本地缓存_L1]
+    req[玩家拉取邮件] --> local[playersrv本地缓存_L1]
     local -->|命中| merge[合并玩家邮件状态]
     local -->|版本落后或缺失| redis[Redis共享缓存_L2]
     redis -->|命中| fillLocal[回填本地缓存]
@@ -379,7 +379,7 @@ flowchart TD
 ```
 
 ```text
-L1 gamesrv 本地缓存:
+L1 playersrv 本地缓存:
     GlobalMailLocalCache
     承接玩家拉取邮件的高频读请求
 
@@ -389,7 +389,7 @@ L2 Redis:
     GlobalMail:{globalMailId}
     GlobalMailByServer:{serverID}
     MailUserProfile:{RoleID}
-    承接跨 gamesrv 共享缓存、版本号和热点索引
+    承接跨 playersrv 共享缓存、版本号和热点索引
 
 L3 MySQL:
     GlobalMail
@@ -401,14 +401,14 @@ L3 MySQL:
 
 读取原则：
 
-- 玩家拉取邮件优先读 `gamesrv` 本地缓存。
+- 玩家拉取邮件优先读 `playersrv` 本地缓存。
 - 本地缓存缺失或版本落后时读 Redis 回填。
 - Redis 缺失时通过 singleflight 和重建锁读取 MySQL，并回填 Redis 和本地缓存。
 - 玩家领取奖励必须重新校验 MySQL 或权威业务数据，不能只信缓存。
 
 ## 6. Redis 缓存
 
-Redis 是跨 `gamesrv` 共享的二级缓存，负责保存版本号、活跃邮件索引、邮件详情和玩家画像短缓存。Redis 不是权威存储，缺失时可以回源 MySQL 重建。
+Redis 是跨 `playersrv` 共享的二级缓存，负责保存版本号、活跃邮件索引、邮件详情和玩家画像短缓存。Redis 不是权威存储，缺失时可以回源 MySQL 重建。
 
 ### 6.1 Key 设计
 
@@ -417,7 +417,7 @@ GlobalMailVersion
     type: string/integer
     value: 当前全局邮件版本
     ttl: 不过期
-    用途: gamesrv 判断本地缓存是否落后
+    用途: playersrv 判断本地缓存是否落后
 
 GlobalMailIndex
     type: sorted set
@@ -443,7 +443,7 @@ GlobalMail:{globalMailId}
     type: string/json 或 hash
     value: 邮件详情、奖励、时间、状态、条件摘要
     ttl: 到 expire_time 后延迟清理
-    用途: gamesrv 回填本地缓存
+    用途: playersrv 回填本地缓存
 
 MailUserProfile:{RoleID}
     type: string/json 或 hash
@@ -497,11 +497,11 @@ VisibleGlobalMailIds:{RoleID}:{GlobalMailVersion}
 
 ### 6.3 Redis 职责
 
-- 保存全局邮件版本号，驱动 `gamesrv` 本地缓存刷新。
+- 保存全局邮件版本号，驱动 `playersrv` 本地缓存刷新。
 - 保存活跃邮件索引，减少 MySQL 扫描。
 - 保存按区服聚合的邮件 ID，加速粗过滤。
 - 缓存玩家画像，降低动态条件检查时的读取压力。
-- 作为本地缓存重建的数据来源，避免所有 `gamesrv` 同时回源 MySQL。
+- 作为本地缓存重建的数据来源，避免所有 `playersrv` 同时回源 MySQL。
 
 ### 6.4 Redis 更新策略
 
@@ -511,7 +511,7 @@ VisibleGlobalMailIds:{RoleID}:{GlobalMailVersion}
     2. 更新 GlobalMail:{globalMailId}。
     3. 更新 GlobalMailIndex、GlobalMailActiveIndex、GlobalMailByServer:{serverID}。
     4. INCR GlobalMailVersion。
-    5. 通过 Kafka 通知 gamesrv 刷新。
+    5. 通过 Kafka 通知 playersrv 刷新。
 
 邮件过期或下线:
     1. 更新 GlobalMail 状态。
@@ -522,8 +522,8 @@ VisibleGlobalMailIds:{RoleID}:{GlobalMailVersion}
 
 ### 6.5 Redis 风险控制
 
-- 所有重建路径使用 singleflight，避免同一 `gamesrv` 内重复回源。
-- Redis 缺失时使用重建锁，避免多台 `gamesrv` 同时打 MySQL。
+- 所有重建路径使用 singleflight，避免同一 `playersrv` 内重复回源。
+- Redis 缺失时使用重建锁，避免多台 `playersrv` 同时打 MySQL。
 - key TTL 增加随机抖动，避免同一时间大量过期。
 - `GlobalMailVersion` 不设置短 TTL，避免版本丢失导致本地缓存无法判断新旧。
 - Redis 不作为领取状态权威来源，领取和发奖仍以 MySQL 或业务权威数据为准。
@@ -551,7 +551,7 @@ event:
 发布流程：
 
 ```text
-1. gmsrv/mgrsrv 审核并发布全局邮件。
+1. gmsrv/adminsrv 审核并发布全局邮件。
 2. MySQL 事务写 GlobalMail、GlobalMailCondition、GlobalMailOutboxEvent。
 3. MySQL 事务提交成功即返回发布成功（不等待 Redis 或 Kafka）。
 4. Outbox Relay 扫描 pending 事件并抢占处理。
@@ -563,28 +563,28 @@ event:
 消费流程：
 
 ```text
-1. 每台 gamesrv 消费 rh.global-mail-events。
+1. 每台 playersrv 消费 rh.global-mail-events。
 2. 比较 event.version 和本地 GlobalMailLocalCache.version。
 3. 如果本地版本落后，从 Redis 加载最新全局邮件缓存。
 4. Redis 缺失时受控回源 MySQL。
-5. 刷新 gamesrv 本地 GlobalMailLocalCache。
-6. 每台 gamesrv 使用独立 consumer group（推荐带 instance_id）。
+5. 刷新 playersrv 本地 GlobalMailLocalCache。
+6. 每台 playersrv 使用独立 consumer group（推荐带 instance_id）。
 7. 定时轮询 Redis GlobalMailVersion 作为兜底。
 ```
 
 广播消费要求：
 
-- 每台 `gamesrv` 都必须收到同一条 `GlobalMailChanged` 事件。
-- Kafka 中可以让每台 `gamesrv` 使用独立 consumer group，或者按稳定实例 ID 维护独立订阅语义。
-- 同一 consumer group 会分摊消息，不适合“每台 gamesrv 都刷新本地缓存”的场景。
+- 每台 `playersrv` 都必须收到同一条 `GlobalMailChanged` 事件。
+- Kafka 中可以让每台 `playersrv` 使用独立 consumer group，或者按稳定实例 ID 维护独立订阅语义。
+- 同一 consumer group 会分摊消息，不适合“每台 playersrv 都刷新本地缓存”的场景。
 
 可靠性要求：
 
 - Kafka 事件只做加速通知，`GlobalMailVersion` 才是刷新依据。
-- 事件可能重复，`gamesrv` 必须按 `version` 幂等处理。
+- 事件可能重复，`playersrv` 必须按 `version` 幂等处理。
 - 事件可能乱序，低于或等于本地版本的事件直接忽略。
 - Kafka 短暂不可用时，Outbox Relay 保留 pending 事件并重试。
-- 即使 Kafka 通知延迟，`gamesrv` 定时轮询 `GlobalMailVersion` 也能最终刷新。
+- 即使 Kafka 通知延迟，`playersrv` 定时轮询 `GlobalMailVersion` 也能最终刷新。
 
 ### 7.1 端到端一致性流程图（改造后）
 
@@ -608,7 +608,7 @@ flowchart TD
     kafka --> retry
     retry --> relayPoll
 
-    markPub --> event[每台 gamesrv 消费事件<br/>独立 consumer group]
+    markPub --> event[每台 playersrv 消费事件<br/>独立 consumer group]
     event --> refresh[ForceRefresh 或 RefreshIfStale]
     refresh --> stale{本地版本是否落后}
     stale -->|是| loadRedis[从 Redis 加载最新快照]
@@ -619,9 +619,9 @@ flowchart TD
     timer[周期轮询 GlobalMailVersion] --> refresh
 ```
 
-## 8. gamesrv 本地缓存
+## 8. playersrv 本地缓存
 
-每台 `gamesrv` 维护进程内本地缓存，承接玩家拉取邮件的高频读请求。本地缓存是 L1 缓存，特点是读取最快，但只在当前进程内有效。
+每台 `playersrv` 维护进程内本地缓存，承接玩家拉取邮件的高频读请求。本地缓存是 L1 缓存，特点是读取最快，但只在当前进程内有效。
 
 ### 8.1 缓存结构
 
@@ -696,12 +696,12 @@ flowchart TD
 
 刷新要求：
 
-- `gamesrv` 启动时预热。
+- `playersrv` 启动时预热。
 - 本地缓存不硬过期，刷新失败时旧值可继续服务。
 - 版本变化后台刷新。
 - 使用 singleflight 防止并发击穿。
 - Redis 作为二级缓存，MySQL 只作为权威存储。
-- GM 发布后通过 Kafka 主动通知 `gamesrv` 刷新，定时检查 `GlobalMailVersion` 兜底。
+- GM 发布后通过 Kafka 主动通知 `playersrv` 刷新，定时检查 `GlobalMailVersion` 兜底。
 
 ### 8.3 请求使用流程
 
@@ -719,7 +719,7 @@ flowchart TD
 
 - 缓存刷新采用构建新对象后原子替换，避免请求读到半成品。
 - 刷新失败不清空旧缓存，避免 Redis/MySQL 抖动影响读路径。
-- 后台刷新增加随机抖动，避免所有 `gamesrv` 同时刷新。
+- 后台刷新增加随机抖动，避免所有 `playersrv` 同时刷新。
 - 本地缓存只服务读取列表，领取奖励必须重新校验权威数据。
 
 ## 9. 缓存击穿和雪崩处理
@@ -827,7 +827,7 @@ RoleID + GlobalMailId 幂等
 玩家拉取邮件：
 
 ```text
-1. 从 gamesrv 本地 GlobalMailLocalCache 获取活跃全局邮件。
+1. 从 playersrv 本地 GlobalMailLocalCache 获取活跃全局邮件。
 2. 按时间和区服做粗过滤。
 3. 读取玩家画像 MailUserProfile。
 4. 检查动态条件。
@@ -851,8 +851,8 @@ RoleID + GlobalMailId 幂等
 需要重点验证：
 
 - 发布一封全局邮件不会产生大量个人邮件写入。
-- 300 万玩家拉取邮件时，热点路径主要命中 `gamesrv` 本地缓存和 Redis。
-- GM 发布后 Kafka 事件能触发各 `gamesrv` 刷新。
+- 300 万玩家拉取邮件时，热点路径主要命中 `playersrv` 本地缓存和 Redis。
+- GM 发布后 Kafka 事件能触发各 `playersrv` 刷新。
 - Kafka 延迟或短暂不可用时，Outbox Relay 能重试，`GlobalMailVersion` 轮询能兜底刷新。
 - Redis 短暂不可用时，旧本地缓存仍可提供只读服务。
 - MySQL 短暂抖动时，高频读路径不会直接击穿到 MySQL。
@@ -879,13 +879,13 @@ Kafka:
     rh.global-mail-events
     GlobalMailChanged
 
-gamesrv内存:
+playersrv内存:
     GlobalMailLocalCache
     compiledConditions
     serverID index
 
 玩家请求路径:
-    优先读 gamesrv 本地缓存
+    优先读 playersrv 本地缓存
     本地缺失读 Redis
     Redis 缺失再受控回源 MySQL
 
@@ -900,7 +900,7 @@ gamesrv内存:
 ```text
 全局邮件内容集中存、分层缓存。
 玩家侧只存状态，不重复存完整邮件内容。
-gamesrv 本地缓存抗读流量。
+playersrv 本地缓存抗读流量。
 Redis 负责二级缓存和版本。
 Kafka 负责业务事件通知和未来扩展。
 MySQL 只做权威存储，不进入高频请求路径。

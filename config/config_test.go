@@ -18,46 +18,46 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.Etcd.LeaseTTL.Duration != 10*time.Second {
 		t.Fatalf("unexpected etcd lease ttl: %s", cfg.Etcd.LeaseTTL.Duration)
 	}
-	if cfg.Gate.RouteTTL.Duration != 5*time.Minute {
-		t.Fatalf("unexpected gate route ttl: %s", cfg.Gate.RouteTTL.Duration)
+	if cfg.Gateway.RouteTTL.Duration != 5*time.Minute {
+		t.Fatalf("unexpected gateway route ttl: %s", cfg.Gateway.RouteTTL.Duration)
 	}
-	if cfg.Gate.SessionTTL.Duration != 90*time.Second {
-		t.Fatalf("unexpected gate session ttl: %s", cfg.Gate.SessionTTL.Duration)
+	if cfg.Gateway.SessionTTL.Duration != 90*time.Second {
+		t.Fatalf("unexpected gateway session ttl: %s", cfg.Gateway.SessionTTL.Duration)
 	}
-	if cfg.Acc.LoginTokenTTL.Duration != 2*time.Minute {
-		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)
+	if cfg.Account.LoginTokenTTL.Duration != 2*time.Minute {
+		t.Fatalf("unexpected account login token ttl: %s", cfg.Account.LoginTokenTTL.Duration)
 	}
-	if cfg.Acc.GameServiceAddr == "" {
-		t.Fatal("expected default game service addr")
+	if cfg.Account.PlayerServiceAddr == "" {
+		t.Fatal("expected default player service addr")
 	}
-	if cfg.Game.RequestQueueWorkers != 4 || cfg.Game.RequestQueueCapacity != 1024 {
-		t.Fatalf("unexpected game request queue config: %+v", cfg.Game)
+	if cfg.Player.RequestQueueWorkers != 4 || cfg.Player.RequestQueueCapacity != 1024 {
+		t.Fatalf("unexpected player request queue config: %+v", cfg.Player)
 	}
-	if cfg.Game.RequestRoleQueueCapacity != 32 {
-		t.Fatalf("unexpected role queue capacity: %d", cfg.Game.RequestRoleQueueCapacity)
+	if cfg.Player.RequestRoleQueueCapacity != 32 {
+		t.Fatalf("unexpected role queue capacity: %d", cfg.Player.RequestRoleQueueCapacity)
 	}
-	if cfg.Game.RequestTimeout.Duration != 3*time.Second {
-		t.Fatalf("unexpected game request timeout: %s", cfg.Game.RequestTimeout.Duration)
+	if cfg.Player.RequestTimeout.Duration != 3*time.Second {
+		t.Fatalf("unexpected player request timeout: %s", cfg.Player.RequestTimeout.Duration)
 	}
-	if cfg.Game.CommandIdempotencyTTL.Duration != 10*time.Minute {
-		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Game.CommandIdempotencyTTL.Duration)
+	if cfg.Player.CommandIdempotencyTTL.Duration != 10*time.Minute {
+		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Player.CommandIdempotencyTTL.Duration)
 	}
-	if cfg.Game.GlobalMailPollInterval.Duration != 30*time.Second {
-		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	if cfg.Player.GlobalMailPollInterval.Duration != 30*time.Second {
+		t.Fatalf("unexpected global mail poll interval: %s", cfg.Player.GlobalMailPollInterval.Duration)
 	}
-	if cfg.Game.GlobalMailRebuildLockTTL.Duration != 30*time.Second || cfg.Game.GlobalMailRebuildWait.Duration != 100*time.Millisecond {
-		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Game)
+	if cfg.Player.GlobalMailRebuildLockTTL.Duration != 30*time.Second || cfg.Player.GlobalMailRebuildWait.Duration != 100*time.Millisecond {
+		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Player)
 	}
-	if cfg.Outbox.LockTTL.Duration != 5*time.Minute || cfg.Outbox.MaxRetries != 5 {
-		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
+	if cfg.MailRelay.LockTTL.Duration != 5*time.Minute || cfg.MailRelay.MaxRetries != 5 {
+		t.Fatalf("unexpected mail relay config: %+v", cfg.MailRelay)
 	}
 }
 
 func TestLoadBytesOverridesDefaults(t *testing.T) {
 	cfg, err := LoadBytes([]byte(`
 service:
-  name: gamesrv
-  instance_id: gamesrv-1
+  name: playersrv
+  instance_id: playersrv-1
 mysql:
   dsn: user:pass@tcp(localhost:3306)/rh
   max_open_conns: 100
@@ -75,15 +75,15 @@ etcd:
     - etcd-1:2379
     - etcd-2:2379
   lease_ttl: 15s
-gate:
+gateway:
   route_ttl: 10m
   virtual_nodes: 200
   session_ttl: 120s
-  gate_conn_renew_interval: 40s
-acc:
+  gateway_conn_renew_interval: 40s
+account:
   login_token_ttl: 3m
-  game_service_addr: "gamesrv:9001"
-game:
+  player_service_addr: "playersrv:9001"
+player:
   request_queue_workers: 8
   request_queue_capacity: 2048
   request_role_queue_capacity: 64
@@ -92,7 +92,7 @@ game:
   global_mail_poll_interval: 45s
   global_mail_rebuild_lock_ttl: 20s
   global_mail_rebuild_wait_interval: 200ms
-outbox:
+mail_relay:
   flush_interval: 2s
   fetch_limit: 50
   lock_ttl: 30s
@@ -101,7 +101,7 @@ outbox:
 	if err != nil {
 		t.Fatalf("load config failed: %v", err)
 	}
-	if cfg.Service.Name != "gamesrv" {
+	if cfg.Service.Name != "playersrv" {
 		t.Fatalf("unexpected service name: %s", cfg.Service.Name)
 	}
 	if cfg.MySQL.DSN == "" {
@@ -125,47 +125,47 @@ outbox:
 	if cfg.Redis.KeyPrefix != "rh:" {
 		t.Fatalf("expected default redis key prefix, got %s", cfg.Redis.KeyPrefix)
 	}
-	if cfg.Gate.RouteTTL.Duration != 10*time.Minute {
-		t.Fatalf("unexpected gate route ttl: %s", cfg.Gate.RouteTTL.Duration)
+	if cfg.Gateway.RouteTTL.Duration != 10*time.Minute {
+		t.Fatalf("unexpected gateway route ttl: %s", cfg.Gateway.RouteTTL.Duration)
 	}
-	if cfg.Gate.VirtualNodes != 200 {
-		t.Fatalf("unexpected gate virtual nodes: %d", cfg.Gate.VirtualNodes)
+	if cfg.Gateway.VirtualNodes != 200 {
+		t.Fatalf("unexpected gateway virtual nodes: %d", cfg.Gateway.VirtualNodes)
 	}
-	if cfg.Gate.SessionTTL.Duration != 120*time.Second {
-		t.Fatalf("unexpected gate session ttl: %s", cfg.Gate.SessionTTL.Duration)
+	if cfg.Gateway.SessionTTL.Duration != 120*time.Second {
+		t.Fatalf("unexpected gateway session ttl: %s", cfg.Gateway.SessionTTL.Duration)
 	}
-	if cfg.Gate.GateConnRenewInterval.Duration != 40*time.Second {
-		t.Fatalf("unexpected gate conn renew interval: %s", cfg.Gate.GateConnRenewInterval.Duration)
+	if cfg.Gateway.GatewayConnRenewInterval.Duration != 40*time.Second {
+		t.Fatalf("unexpected gateway conn renew interval: %s", cfg.Gateway.GatewayConnRenewInterval.Duration)
 	}
-	if cfg.Acc.LoginTokenTTL.Duration != 3*time.Minute {
-		t.Fatalf("unexpected acc login token ttl: %s", cfg.Acc.LoginTokenTTL.Duration)
+	if cfg.Account.LoginTokenTTL.Duration != 3*time.Minute {
+		t.Fatalf("unexpected account login token ttl: %s", cfg.Account.LoginTokenTTL.Duration)
 	}
-	if cfg.Acc.GameServiceAddr != "gamesrv:9001" {
-		t.Fatalf("unexpected game service addr: %s", cfg.Acc.GameServiceAddr)
+	if cfg.Account.PlayerServiceAddr != "playersrv:9001" {
+		t.Fatalf("unexpected player service addr: %s", cfg.Account.PlayerServiceAddr)
 	}
-	if cfg.Game.RequestQueueWorkers != 8 {
-		t.Fatalf("unexpected request queue workers: %d", cfg.Game.RequestQueueWorkers)
+	if cfg.Player.RequestQueueWorkers != 8 {
+		t.Fatalf("unexpected request queue workers: %d", cfg.Player.RequestQueueWorkers)
 	}
-	if cfg.Game.RequestQueueCapacity != 2048 {
-		t.Fatalf("unexpected request queue capacity: %d", cfg.Game.RequestQueueCapacity)
+	if cfg.Player.RequestQueueCapacity != 2048 {
+		t.Fatalf("unexpected request queue capacity: %d", cfg.Player.RequestQueueCapacity)
 	}
-	if cfg.Game.RequestRoleQueueCapacity != 64 {
-		t.Fatalf("unexpected role queue capacity: %d", cfg.Game.RequestRoleQueueCapacity)
+	if cfg.Player.RequestRoleQueueCapacity != 64 {
+		t.Fatalf("unexpected role queue capacity: %d", cfg.Player.RequestRoleQueueCapacity)
 	}
-	if cfg.Game.RequestTimeout.Duration != 5*time.Second {
-		t.Fatalf("unexpected request timeout: %s", cfg.Game.RequestTimeout.Duration)
+	if cfg.Player.RequestTimeout.Duration != 5*time.Second {
+		t.Fatalf("unexpected request timeout: %s", cfg.Player.RequestTimeout.Duration)
 	}
-	if cfg.Game.CommandIdempotencyTTL.Duration != 20*time.Minute {
-		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Game.CommandIdempotencyTTL.Duration)
+	if cfg.Player.CommandIdempotencyTTL.Duration != 20*time.Minute {
+		t.Fatalf("unexpected command idempotency ttl: %s", cfg.Player.CommandIdempotencyTTL.Duration)
 	}
-	if cfg.Game.GlobalMailPollInterval.Duration != 45*time.Second {
-		t.Fatalf("unexpected global mail poll interval: %s", cfg.Game.GlobalMailPollInterval.Duration)
+	if cfg.Player.GlobalMailPollInterval.Duration != 45*time.Second {
+		t.Fatalf("unexpected global mail poll interval: %s", cfg.Player.GlobalMailPollInterval.Duration)
 	}
-	if cfg.Game.GlobalMailRebuildLockTTL.Duration != 20*time.Second || cfg.Game.GlobalMailRebuildWait.Duration != 200*time.Millisecond {
-		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Game)
+	if cfg.Player.GlobalMailRebuildLockTTL.Duration != 20*time.Second || cfg.Player.GlobalMailRebuildWait.Duration != 200*time.Millisecond {
+		t.Fatalf("unexpected global mail rebuild config: %+v", cfg.Player)
 	}
-	if cfg.Outbox.FlushInterval.Duration != 2*time.Second || cfg.Outbox.FetchLimit != 50 || cfg.Outbox.LockTTL.Duration != 30*time.Second || cfg.Outbox.MaxRetries != 3 {
-		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
+	if cfg.MailRelay.FlushInterval.Duration != 2*time.Second || cfg.MailRelay.FetchLimit != 50 || cfg.MailRelay.LockTTL.Duration != 30*time.Second || cfg.MailRelay.MaxRetries != 3 {
+		t.Fatalf("unexpected mail relay config: %+v", cfg.MailRelay)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestLoadFile(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 service:
-  name: mgrsrv
-  instance_id: mgrsrv-1
+  name: adminsrv
+  instance_id: adminsrv-1
 `), 0600); err != nil {
 		t.Fatalf("write config failed: %v", err)
 	}
@@ -184,7 +184,7 @@ service:
 	if err != nil {
 		t.Fatalf("load config file failed: %v", err)
 	}
-	if cfg.Service.Name != "mgrsrv" {
+	if cfg.Service.Name != "adminsrv" {
 		t.Fatalf("unexpected service name: %s", cfg.Service.Name)
 	}
 }

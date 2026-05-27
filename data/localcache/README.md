@@ -1,8 +1,8 @@
 # Local Cache
 
-该目录用于承载 `gamesrv` 进程内本地缓存实现。
+该目录用于承载 `playersrv` 进程内本地缓存实现。
 
-当前本地缓存实现仍在 `domain/globalmail` 中，并已接入真实 `gamesrv`：
+当前本地缓存实现仍在 `domain/globalmail` 中，并已接入真实 `playersrv`：
 
 - `LocalCache`
 - 缓存快照原子替换
